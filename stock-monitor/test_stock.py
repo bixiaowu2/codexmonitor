@@ -61,4 +61,29 @@ class TestStock(unittest.TestCase):
         self.assertEqual([r['symbol'] for r in groups['美国股票']], ['NVDA'])
         self.assertEqual([r['symbol'] for r in groups['其他市场']], ['ASML'])
 
+    def test_separate_market_queues_and_hourly_dedup(self):
+        from dataclasses import replace
+        from unittest.mock import Mock
+        cfg=replace(self.cfg,telegram_enabled=True,dingtalk_enabled=True,max_candidates=5)
+        cn=[{'symbol':f'{i:06}.SZ','name':'CN','region':'中国A股','theme':'AI','theme_weight':35} for i in range(6)]
+        us=[{'symbol':f'US{i}','name':'US','region':'美国','theme':'AI','theme_weight':5} for i in range(6)]
+        samples=[parse_chart(self.chart(),item) for item in cn+us]
+        collector=Mock();collector.collect.return_value=(samples,[])
+        with patch('radar.time.time',return_value=time.time()//3600*3600+60):
+            report=cycle(cfg,self.store,collector,cn+us)
+            cycle(cfg,self.store,collector,cn+us)
+        self.assertEqual(len(report['markets']['中国股票']),5)
+        self.assertEqual(len(report['markets']['美国股票']),5)
+        with self.store.db() as d:
+            messages=[json.loads(r[0]) for r in d.execute("SELECT payload FROM outbox WHERE key LIKE '%:ranking:%'")]
+        self.assertEqual(len(messages),4)
+        for m in messages:
+            self.assertNotIn('US0',m['text']) if m['market']=='中国股票' else self.assertNotIn('000000.SZ',m['text'])
+            self.assertLess(len(m['text']),4096)
+    def test_listing_market_overrides_domicile(self):
+        universe=json.loads((Path(__file__).parent/'universe.json').read_text())
+        groups={r['symbol']:market_group(r) for r in universe}
+        for symbol in ('ASML','TSM','ARM'):self.assertEqual(groups[symbol],'美国股票')
+        self.assertEqual(groups['005930.KS'],'其他市场')
+
 if __name__ == '__main__': unittest.main()
