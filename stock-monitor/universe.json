@@ -1,20 +1,146 @@
 [
-  {"symbol":"688981.SS","name":"中芯国际","region":"中国A股","theme":"自主可控·晶圆制造","theme_weight":35},
-  {"symbol":"688012.SS","name":"中微公司","region":"中国A股","theme":"自主可控·半导体设备","theme_weight":35},
-  {"symbol":"002371.SZ","name":"北方华创","region":"中国A股","theme":"自主可控·半导体设备","theme_weight":35},
-  {"symbol":"688041.SS","name":"海光信息","region":"中国A股","theme":"自主可控·国产算力","theme_weight":35},
-  {"symbol":"688256.SS","name":"寒武纪","region":"中国A股","theme":"自主可控·AI芯片","theme_weight":35},
-  {"symbol":"603986.SS","name":"兆易创新","region":"中国A股","theme":"自主可控·存储芯片","theme_weight":30},
-  {"symbol":"300308.SZ","name":"中际旭创","region":"中国A股","theme":"AI产业链·光模块","theme_weight":35},
-  {"symbol":"300502.SZ","name":"新易盛","region":"中国A股","theme":"AI产业链·光模块","theme_weight":35},
-  {"symbol":"601138.SS","name":"工业富联","region":"中国A股","theme":"AI产业链·服务器制造","theme_weight":30},
-  {"symbol":"000977.SZ","name":"浪潮信息","region":"中国A股","theme":"AI产业链·服务器","theme_weight":30},
-  {"symbol":"NVDA","name":"NVIDIA","region":"美国","theme":"AI产业链·GPU","theme_weight":35},
-  {"symbol":"AMD","name":"AMD","region":"美国","theme":"AI产业链·加速器","theme_weight":30},
-  {"symbol":"AVGO","name":"Broadcom","region":"美国","theme":"AI产业链·网络芯片","theme_weight":30},
-  {"symbol":"ASML","name":"ASML","region":"欧洲","theme":"供应链断裂·光刻设备","theme_weight":35},
-  {"symbol":"TSM","name":"台积电","region":"中国台湾","theme":"供应链断裂·先进制造","theme_weight":30},
-  {"symbol":"005930.KS","name":"Samsung Electronics","region":"韩国","theme":"供应链断裂·存储与制造","theme_weight":25},
-  {"symbol":"ARM","name":"Arm Holdings","region":"英国","theme":"AI产业链·芯片架构","theme_weight":25},
-  {"symbol":"SMCI","name":"Super Micro Computer","region":"美国","theme":"AI产业链·服务器","theme_weight":25}
+  {
+    "symbol": "688981.SS",
+    "name": "中芯国际",
+    "region": "中国A股",
+    "theme": "自主可控·晶圆制造",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "688012.SS",
+    "name": "中微公司",
+    "region": "中国A股",
+    "theme": "自主可控·半导体设备",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "002371.SZ",
+    "name": "北方华创",
+    "region": "中国A股",
+    "theme": "自主可控·半导体设备",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "688041.SS",
+    "name": "海光信息",
+    "region": "中国A股",
+    "theme": "自主可控·国产算力",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "688256.SS",
+    "name": "寒武纪",
+    "region": "中国A股",
+    "theme": "自主可控·AI芯片",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "603986.SS",
+    "name": "兆易创新",
+    "region": "中国A股",
+    "theme": "自主可控·存储芯片",
+    "theme_weight": 30,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "300308.SZ",
+    "name": "中际旭创",
+    "region": "中国A股",
+    "theme": "AI产业链·光模块",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "300502.SZ",
+    "name": "新易盛",
+    "region": "中国A股",
+    "theme": "AI产业链·光模块",
+    "theme_weight": 35,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "601138.SS",
+    "name": "工业富联",
+    "region": "中国A股",
+    "theme": "AI产业链·服务器制造",
+    "theme_weight": 30,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "000977.SZ",
+    "name": "浪潮信息",
+    "region": "中国A股",
+    "theme": "AI产业链·服务器",
+    "theme_weight": 30,
+    "market_group": "中国股票"
+  },
+  {
+    "symbol": "NVDA",
+    "name": "NVIDIA",
+    "region": "美国",
+    "theme": "AI产业链·GPU",
+    "theme_weight": 35,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "AMD",
+    "name": "AMD",
+    "region": "美国",
+    "theme": "AI产业链·加速器",
+    "theme_weight": 30,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "AVGO",
+    "name": "Broadcom",
+    "region": "美国",
+    "theme": "AI产业链·网络芯片",
+    "theme_weight": 30,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "ASML",
+    "name": "ASML",
+    "region": "欧洲",
+    "theme": "供应链断裂·光刻设备",
+    "theme_weight": 35,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "TSM",
+    "name": "台积电",
+    "region": "中国台湾",
+    "theme": "供应链断裂·先进制造",
+    "theme_weight": 30,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "005930.KS",
+    "name": "Samsung Electronics",
+    "region": "韩国",
+    "theme": "供应链断裂·存储与制造",
+    "theme_weight": 25,
+    "market_group": "其他市场"
+  },
+  {
+    "symbol": "ARM",
+    "name": "Arm Holdings",
+    "region": "英国",
+    "theme": "AI产业链·芯片架构",
+    "theme_weight": 25,
+    "market_group": "美国股票"
+  },
+  {
+    "symbol": "SMCI",
+    "name": "Super Micro Computer",
+    "region": "美国",
+    "theme": "AI产业链·服务器",
+    "theme_weight": 25,
+    "market_group": "美国股票"
+  }
 ]
