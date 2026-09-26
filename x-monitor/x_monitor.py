@@ -27,6 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from public_feed import PublicFeed, load_accounts
 
 
 logging.basicConfig(
@@ -154,19 +155,19 @@ def extract_tweet(account: str, article: Any) -> Tweet | None:
         return None
 
 
-def scrape_account(page: Page, account: str, max_items: int = 20) -> list[Tweet]:
+def scrape_account(page: Page, account: str, max_items: int = 20, navigation_ms: int = 45000, cards_ms: int = 15000, scrolls: int = 5) -> list[Tweet]:
     url = f"https://x.com/{quote(account)}"
     LOG.info("checking @%s", account)
-    response = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+    response = page.goto(url, wait_until="domcontentloaded", timeout=navigation_ms)
     if response and response.status >= 400:
         raise RuntimeError(f"X returned HTTP {response.status}; check network, X access restrictions and login state")
     try:
-        page.locator(CARD_SELECTOR).first.wait_for(timeout=15_000)
+        page.locator(CARD_SELECTOR).first.wait_for(timeout=cards_ms)
     except PlaywrightTimeoutError:
         raise RuntimeError(f"no tweet cards found for @{account}; login, rate limit, or selector change may be involved")
     found: dict[str, Tweet] = {}
     # Read each viewport before scrolling: X virtualizes timeline cards.
-    for _ in range(5):
+    for _ in range(scrolls):
         cards = page.locator(CARD_SELECTOR)
         before = len(found)
         for index in range(cards.count()):
@@ -397,6 +398,19 @@ def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]
     return not state["pending"]
 
 
+def collect_extra_account(page, account, metadata, state, routes, path, feed):
+    """Use the same durable per-channel queue for new accounts as for core accounts."""
+    tweets = scrape_account(page, account, max_items=8, navigation_ms=15000, cards_ms=5000, scrolls=2)
+    ingest(state, account, tweets, routes, path)
+    # Export is independent: a shared-feed problem must not lose user notifications.
+    try:
+        feed.success(account, tweets, metadata['interval_seconds'])
+    except Exception as exc:
+        LOG.error('public export failed for @%s: %s', account, type(exc).__name__)
+    record_scrape_health(state, account, True, routes, path)
+    deliver_pending(state, routes, path)
+
+
 def handle_signal(_signum: int, _frame: Any) -> None:
     global STOP
     STOP = True
@@ -523,7 +537,9 @@ def run() -> int:
     if args.login:
         return login_browser(profile_dir)
     if args.health:
-        return health_check(state_path, accounts)
+        extra_file=os.getenv('X_EXTRA_ACCOUNTS_FILE','')
+        extra_accounts=list(load_accounts(extra_file)) if extra_file else []
+        return health_check(state_path, list(dict.fromkeys(accounts+extra_accounts)))
     routes = load_routes(routes_path)
 
     if args.check_config:
@@ -541,6 +557,13 @@ def run() -> int:
     if check_config(accounts, routes, profile_dir):
         return 2
     state = load_state(state_path)
+    registry_path = os.getenv('X_EXTRA_ACCOUNTS_FILE','')
+    feed_path = os.getenv('X_PUBLIC_FEED_DB','')
+    feed = PublicFeed(feed_path) if feed_path else None
+    registry = load_accounts(registry_path) if registry_path else {}
+    if feed:feed.set_registry(registry)
+    if registry and feed is None:raise RuntimeError('X_PUBLIC_FEED_DB is required for extra account scheduling')
+    if any(not targets_for(a,routes) for a in registry):raise RuntimeError('extra account has no notification target')
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -556,6 +579,11 @@ def run() -> int:
         try:
             while not STOP:
                 cycle_start = time.monotonic()
+                if registry_path:
+                    try:
+                        registry = load_accounts(registry_path)
+                        if feed:feed.set_registry(registry)
+                    except (OSError,ValueError,TypeError): LOG.error('invalid extra account registry; retaining last valid registry')
                 cycle_ok = True
                 deliver_pending(state, routes, state_path)
                 for account in accounts:
@@ -564,14 +592,33 @@ def run() -> int:
                     try:
                         tweets = scrape_account(page, account, max_items=max_items)
                         ingest(state, account, tweets, routes, state_path)
+                        if feed and account in registry:
+                            try: feed.success(account,tweets,registry[account]['interval_seconds'])
+                            except Exception as exc: LOG.error('public export failed: %s',type(exc).__name__)
                         record_scrape_health(state, account, True, routes, state_path)
                     except Exception as exc:
                         cycle_ok = False
                         LOG.error("check failed for @%s: %s", account, exc)
                         record_scrape_health(state, account, False, routes, state_path)
+                        if feed and account in registry:
+                            try: feed.failure(account,type(exc).__name__,registry[account]['interval_seconds'])
+                            except Exception: LOG.error('public feed health write failed')
                         if page.is_closed():
                             raise RuntimeError("browser page closed; exiting for supervisor restart") from exc
                     deliver_pending(state, routes, state_path)
+                if feed and not STOP:
+                    extra_started=time.monotonic()
+                    for account in feed.due(registry,exclude=accounts,limit=6):
+                        if STOP or time.monotonic()-extra_started>=60 or time.monotonic()-cycle_start>=poll_seconds-20: break
+                        try:
+                            collect_extra_account(page,account,registry[account],state,routes,state_path,feed)
+                        except Exception as exc:
+                            cycle_ok = False
+                            feed.failure(account,type(exc).__name__,registry[account]['interval_seconds'])
+                            record_scrape_health(state,account,False,routes,state_path)
+                            LOG.warning('extra account @%s failed: %s',account,type(exc).__name__)
+                            if page.is_closed(): raise RuntimeError('browser page closed') from exc
+                        deliver_pending(state,routes,state_path)
                 if args.once:
                     return 0 if cycle_ok and not state["pending"] else 1
                 elapsed = time.monotonic() - cycle_start

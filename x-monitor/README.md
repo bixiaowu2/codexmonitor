@@ -85,3 +85,24 @@ python -m unittest discover -s tests -v
 ```
 
 测试涵盖独立基线、旧帖过滤、失败重试及重启恢复、机器人业务拒收、错误响应和测试命令目标覆盖。它们不访问真实 X，不向真实群发消息。
+
+
+## 新增 KOL / 生态账户与 Meme 共享出口
+
+新增账户统一维护在 `x_accounts.json`。12个初始条目包含9个新增研究、风险调查和官方生态账户，以及原有3个Binance账户。账户身份参考公开来源，尚未以喊单收益回测验证；官方账号与风险调查账号不等于推荐买入。
+
+配置 `X_EXTRA_ACCOUNTS_FILE=./x_accounts.json` 后，程序每轮重新读取清单；新增账户的帖子通过原有Telegram/钉钉配置和持久化队列投递，逐渠道确认、失败重试。`routes.json` 如有单独账户规则则优先使用该规则。首次成功读取只建立基线，不补发历史帖。原账户仍由 `X_ACCOUNTS` 优先轮询，同名条目不重复采集。
+
+新增账户目标间隔120秒，每轮最多6个；额外采集预算60秒，接近原轮次截止则停止，按最早到期轮转。正常情况下每个新增账户约2–4分钟检查一次，页面失败会退避至最多1小时；因此不是X发帖实时订阅，也不能保证任何情况下5分钟内送达。每次可见最多8条，极高频账户可能超出单轮可见范围。
+
+`X_PUBLIC_FEED_DB` 指定只含公开原帖的SQLite出口，记录24小时内的帖子与账户采集健康，不写入Token、Webhook或浏览器会话。原帖作者须与监控账户一致；转发别人的卡片不冒充作者本人。共享出口故障不会取消已入队的新帖通知。
+
+云端跨服务配置示例（需要已存在meme-radar用户组）：
+
+```bash
+sudo install -d -o ubuntu -g meme-radar -m 2750 /var/lib/meme-x-feed
+# X服务环境中：X_PUBLIC_FEED_DB=/var/lib/meme-x-feed/feed.sqlite
+# Meme服务环境中：MEME_X_PUBLIC_FEED_DB=/var/lib/meme-x-feed/feed.sqlite
+```
+
+数据库由X服务用户创建，0640权限；Meme服务只读。部署后要分别核验账户成功采集时间、通知投递结果和Meme的 `latest.social` 字段，不能只凭进程active判断接通。

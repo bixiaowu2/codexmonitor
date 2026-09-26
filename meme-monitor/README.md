@@ -1,4 +1,4 @@
-# Meme Radar v0.2
+# Meme Radar v0.3
 
 六链公开 DEX 池候选雷达：BSC、Solana、Robinhood Chain、X Layer、Arc、Stable。仅研究与提醒，无交易或私钥功能。当前属于数据采集与排名基础版，未达到完整 GMGN 功能。
 
@@ -14,7 +14,7 @@
 
 排名是未经回测校准的启发式；不等于百倍概率。候选来自DEX池，不保证都是Meme；稳定币、包装资产、股票映射资产可能进入样本。池储备不等于实际可卖出深度，成交笔数不等于真实独立买家或净流入。合约权限/蜜罐、持仓集中度、关联钱包、解锁尚未自动验证。
 
-可选钱包与KOL/X输入文件必须包含链、精确合约、24小时内时间及HTTPS来源；同名符号不能匹配。输入只是外部证据，暂不加分。尚未配置自动聪明钱包跟踪、X/KOL抓取或操盘机构识别。
+可选钱包与KOL/X输入文件必须包含链、精确合约、24小时内时间及HTTPS来源；同名符号不能匹配。输入只是外部证据，暂不加分。可通过 `MEME_X_PUBLIC_FEED_DB` 读取现有x-monitor的公开帖子；聪明钱包跟踪与操盘机构识别尚未接入。
 
 ## 通知与存储
 
@@ -27,3 +27,10 @@ SQLite保存 `runtime.latest`、`runtime.health`、最新池快照7天、每15�
 Python3.10+标准库，无Docker或模型API调用。Oracle ARM64 Ubuntu24.04用systemd运行。复制 `.env.example` 为 `/etc/meme-radar.env`（0600）；运行 `sudo bash deploy/install-systemd.sh`，然后 `sudo systemctl enable --now meme-radar`。升级前备份代码、环境文件、unit及SQLite；安装脚本本身不会替你备份。
 
 测试：`python3 -m unittest -v`。`python3 radar.py`会执行一轮真实采集，使用临时 `MEME_DATA` 可避免影响线上数据库。生产查看 `journalctl -u meme-radar`；详细状态从SQLite的runtime读取。主循环退出自动重启，CPU限额1核，内存限额768MiB。
+
+
+## X/KOL 联动
+
+账户名单统一位于仓库 `x-monitor/x_accounts.json`，由x-monitor管理采集和原有X群的新帖通知。Meme只读共享SQLite，24小时内原帖才能作为证据。Solana地址保持大小写；EVM合约必须同时匹配明确链名，跨链歧义、同名符号、旧帖或作者URL不一致均不归因。
+
+候选榜展示匹配到的独立账号数、原帖摘要和链接。提及可能是质疑、风险警告或推广，暂不自动判断立场，不加买入评分。当前只关联雷达已采集到的候选合约，尚未根据所有X提及新增链上标的。共享采集异常会在 `runtime.latest.social` 及整体状态中标记。原始KOL帖子仍发往原X群，Meme排名仍发往Meme自己的群。

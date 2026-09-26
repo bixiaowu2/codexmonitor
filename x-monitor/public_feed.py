@@ -1,5 +1,5 @@
 """Public post bridge. No credentials, cookies or notification routes enter this DB."""
-import json,os,re,sqlite3,time
+import contextlib,json,os,re,sqlite3,time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,6 +12,7 @@ def load_accounts(path):
     if not isinstance(raw,dict) or not isinstance(raw.get('accounts'),list):raise ValueError('invalid_accounts_registry')
     out={}
     for item in raw['accounts']:
+        if not isinstance(item,dict):raise ValueError('invalid_account_entry')
         if not item.get('enabled',True):continue
         handle=str(item.get('handle','')).lstrip('@').lower()
         if not re.fullmatch(r'[a-z0-9_]{1,15}',handle) or handle in out:raise ValueError('invalid_or_duplicate_handle')
@@ -29,11 +30,19 @@ class PublicFeed:
         self.path=Path(path)
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.db() as d:
-            d.executescript('''CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY,account TEXT,watched_account TEXT,url TEXT,text TEXT,published REAL,observed REAL);
+            d.executescript('''CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,payload TEXT);
+                CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY,account TEXT,watched_account TEXT,url TEXT,text TEXT,published REAL,observed REAL);
                 CREATE INDEX IF NOT EXISTS recent_posts ON posts(published);
                 CREATE TABLE IF NOT EXISTS accounts(account TEXT PRIMARY KEY,last_attempt REAL,last_success REAL,next_due REAL,failures INTEGER,error TEXT);''')
         self.path.chmod(0o640)
-    def db(self):return sqlite3.connect(self.path,timeout=3)
+    @contextlib.contextmanager
+    def db(self):
+        conn=sqlite3.connect(self.path,timeout=3)
+        try:
+            with conn:yield conn
+        finally:conn.close()
+    def set_registry(self, registry):
+        with self.db() as d:d.execute('INSERT OR REPLACE INTO metadata VALUES(?,?)',('accounts',json.dumps(registry,ensure_ascii=False)))
     def success(self,account,tweets,interval=600,now=None):
         now=time.time() if now is None else now
         count=0
