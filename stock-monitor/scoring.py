@@ -9,10 +9,13 @@ def score(row):
     overheated = 20 if change >= 12 else 0
     value = round(max(0, min(100, theme + momentum + volume + breakout - overheated)), 1)
     reasons = [row.get('theme', '主题观察')]
-    if change > 0: reasons.append(f'近期涨幅{change:.1f}%')
+    if change > 0: reasons.append(f'较上交易日末根有效K线{change:.1f}%')
     if vr >= 1.5: reasons.append(f'成交量约为基准{vr:.1f}倍')
     if breakout: reasons.append('价量同步突破')
     risk = ['仅基于公开行情，未验证财务、估值和事件真实性']
     if change >= 12: risk.append('短期涨幅过热')
     if vr >= 4: risk.append('成交量异常放大')
+    if not row.get('fresh', False): risk.append('休市或行情过期，不触发即时通知')
+    if row.get('change') is None: risk.append('上交易日价格缺失')
+    if row.get('volume_ratio') is None: risk.append('成交量基准不足')
     return {'score': value, 'stage': 'hot' if value >= 70 else 'watch', 'reasons': reasons, 'risk': risk}
