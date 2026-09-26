@@ -11,3 +11,7 @@ Rankings are sent separately by listing market, with up to five stocks per marke
 Data uses completed 5-minute candles. Stale quotes do not generate rankings or instant alerts; closed markets therefore remain quiet. Public quotes may be delayed. Theme labels are a manually configured research universe: policy/news/financial verification is not implemented in this version.
 
 The universe includes a Hong Kong subgroup under Chinese stocks. Hong Kong candidates are labeled 港股 and ranked within the Chinese-stock market feed; current coverage focuses on semiconductor manufacturing/equipment, AI cloud/models, optical sensors, and intelligent devices. Inclusion is a monitoring hypothesis, not a recommendation or a claim of 100x potential.
+
+## 前瞻结果账本
+
+即时信号始终写入 `forward_tracks`，记录 1h/6h/24h/7d 的后续收益、峰值和回撤；通知开关不影响研究样本。

@@ -6,7 +6,7 @@ from scoring import score
 from sources import Collector
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
-VERSION='meme-v0.3'
+VERSION='meme-v0.4'
 
 def fmt(p,s):
     risk='；'.join(s.get('risk') or [])

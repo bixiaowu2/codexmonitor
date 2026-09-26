@@ -7,7 +7,7 @@ from scoring import score
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 
-VERSION = 'stock-v0.4'
+VERSION = 'stock-v0.5'
 
 def market_group(row):
     explicit = row.get('market_group')
