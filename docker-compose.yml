@@ -1,0 +1,29 @@
+services:
+  x-monitor:
+    build: .
+    env_file:
+      - .env
+    init: true
+    shm_size: 1gb
+    environment:
+      HEADLESS: "false"
+      BROWSER_PROFILE_DIR: /app/browser-profile
+      STATE_FILE: /app/data/state.json
+      ROUTES_FILE: /app/routes.json
+    volumes:
+      - ./browser-profile:/app/browser-profile
+      - ./data:/app/data
+      - ./routes.json:/app/routes.json:ro
+    restart: unless-stopped
+    stop_grace_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "x_monitor.py", "--health"]
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 180s

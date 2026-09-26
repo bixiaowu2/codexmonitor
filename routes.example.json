@@ -1,0 +1,32 @@
+{
+  "default": [
+    {
+      "type": "wecom",
+      "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE_ME"
+    },
+    {
+      "type": "dingtalk",
+      "url": "https://oapi.dingtalk.com/robot/send?access_token=REPLACE_ME",
+      "secret": ""
+    }
+  ],
+  "accounts": {
+    "account_a": [
+      {
+        "type": "wecom",
+        "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=GROUP_A_KEY"
+      },
+      {
+        "type": "dingtalk",
+        "url": "https://oapi.dingtalk.com/robot/send?access_token=GROUP_A_TOKEN",
+        "secret": "GROUP_A_SECRET_IF_ENABLED"
+      }
+    ],
+    "account_b": [
+      {
+        "type": "wecom",
+        "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=GROUP_B_KEY"
+      }
+    ]
+  }
+}

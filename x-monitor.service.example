@@ -1,0 +1,19 @@
+[Unit]
+Description=X account monitor without paid X API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Replace with the account that owns the browser profile and project.
+User=REPLACE_WITH_LOCAL_USER
+Environment=HEADLESS=false
+Type=simple
+WorkingDirectory=/opt/x-monitor
+EnvironmentFile=/opt/x-monitor/.env
+ExecStart=/bin/bash /opt/x-monitor/scripts/run-monitor.sh
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

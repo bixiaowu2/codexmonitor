@@ -1,0 +1,16 @@
+{
+  "accounts": {
+    "account_a": [
+      {
+        "type": "telegram",
+        "url": "https://api.telegram.org/botREPLACE_ME/sendMessage",
+        "chat_id": "-100_REPLACE_ME"
+      },
+      {
+        "type": "dingtalk",
+        "url": "https://oapi.dingtalk.com/robot/send?access_token=REPLACE_ME",
+        "secret": ""
+      }
+    ]
+  }
+}
