@@ -215,6 +215,165 @@
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",
       "score_weight": 0
+    },
+    {
+      "handle": "spotonchain",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://x.com/spotonchain"
+      ],
+      "reason": "跨链链上资金与交易分析；用于事件线索，需独立复核。",
+      "interval_seconds": 300,
+      "priority": 4,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "ArkhamIntel",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://x.com/ArkhamIntel"
+      ],
+      "reason": "地址实体与链上资金分析；标签可能滞后或不完整。",
+      "interval_seconds": 300,
+      "priority": 4,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Bubblemaps",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "risk_research",
+      "evidence": [
+        "https://x.com/Bubblemaps"
+      ],
+      "reason": "持仓关系和钱包聚类研究；用于集中度与关联线索。",
+      "interval_seconds": 300,
+      "priority": 4,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "TheDataNerd",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://x.com/TheDataNerd"
+      ],
+      "reason": "链上数据观察；不等于项目背书。",
+      "interval_seconds": 300,
+      "priority": 4,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "DefiLlama",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://x.com/DefiLlama"
+      ],
+      "reason": "生态和协议数据；关注链上增长和流动性，不直接等于Meme信号。",
+      "interval_seconds": 300,
+      "priority": 4,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Ansem",
+      "chains": [
+        "solana"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/Ansem"
+      ],
+      "reason": "Solana/Meme市场观点，影响力高但存在推广和利益冲突风险。",
+      "interval_seconds": 300,
+      "priority": 8,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "AltcoinSherpa",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/AltcoinSherpa"
+      ],
+      "reason": "交易观点账户，存在跟单和利益冲突风险。",
+      "interval_seconds": 300,
+      "priority": 8,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Murad",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/Murad"
+      ],
+      "reason": "Meme市场高影响力观点，风险和利益冲突高，只做观察。",
+      "interval_seconds": 300,
+      "priority": 8,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
     }
   ]
 }
