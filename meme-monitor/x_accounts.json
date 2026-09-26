@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "review_policy": "身份来源可核验不等于收益可靠；新增账户需公开来源，尚未按喊单收益验证。",
+  "accounts": [
+    {
+      "handle": "lookonchain",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://www.lookonchain.com"
+      ],
+      "reason": "链上资金与钱包交易报道；官网链接核验身份，钱包标签需独立复核。",
+      "interval_seconds": 300,
+      "priority": 1,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "zachxbt",
+      "chains": [
+        "bsc",
+        "solana",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "risk_research",
+      "evidence": [
+        "https://thedefiant.io/news/hacks/zachxbt-accuses-influencer-ansem-promoting-solana-memecoin-pump-dumps-ac9dfb13"
+      ],
+      "reason": "链上风险与事件调查，负面提及不能当成利好。",
+      "interval_seconds": 600,
+      "priority": 2,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "mert",
+      "chains": [
+        "solana"
+      ],
+      "category": "ecosystem",
+      "evidence": [
+        "https://solana.com"
+      ],
+      "reason": "Solana官网引用的生态开发者观点；用于生态变化，不作为跟单依据。",
+      "interval_seconds": 600,
+      "priority": 3,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "BNBChain",
+      "chains": [
+        "bsc"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://www.bnbchain.org"
+      ],
+      "reason": "BNB Chain官方公告，官网链接核验。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "solana_devs",
+      "chains": [
+        "solana"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://solana.com"
+      ],
+      "reason": "Solana官方开发生态账户，官网链接核验。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "RobinhoodApp",
+      "chains": [
+        "robinhood"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://robinhood.com/us/en/crypto/chain/"
+      ],
+      "reason": "Robinhood Chain官方页面页脚链接；企业公告不等于认可任意同名代币。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "arc",
+      "chains": [
+        "arc"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://docs.arc.io"
+      ],
+      "reason": "Arc官方文档链接核验。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "stable",
+      "chains": [
+        "stable"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://www.stable.xyz"
+      ],
+      "reason": "Stable官网链接核验。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "XLayerOfficial",
+      "chains": [
+        "xlayer"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://www.okx.com/xlayer"
+      ],
+      "reason": "OKX X Layer官网链接核验。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "cz_binance",
+      "chains": [
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/cz_binance"
+      ],
+      "reason": "沿用用户原有重点监控账户；文字相关Meme属市场叙事，不能推定发行或背书。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "heyibinance",
+      "chains": [
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/heyibinance"
+      ],
+      "reason": "沿用用户原有重点监控账户；交易平台相关观点存在利益关系。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "binancezh",
+      "chains": [
+        "bsc"
+      ],
+      "category": "official",
+      "evidence": [
+        "https://x.com/binancezh"
+      ],
+      "reason": "沿用用户原有公告账户；需区分公告与个人推广。",
+      "interval_seconds": 600,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    }
+  ]
+}

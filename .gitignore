@@ -13,3 +13,15 @@ work/
 !.env.example
 *.key
 *.pem
+
+# Runtime and private configuration for every monitor
+**/.env
+**/.env.*
+!**/.env.example
+**/browser-profile/
+**/data/
+**/runtime/
+**/*.sqlite*
+**/*.jsonl
+**/*.key
+**/*.pem

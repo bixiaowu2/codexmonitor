@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+live/
+__pycache__/
+*.sqlite*
