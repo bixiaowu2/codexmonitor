@@ -5,6 +5,7 @@ from config import Config
 from sources import Collector, load_universe
 from scoring import score
 from storage import Store
+from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 
 VERSION = 'stock-v0.4'
 
@@ -55,9 +56,16 @@ def cycle(cfg, store, collector=None, universe=None):
         kind = 'new_hot' if s['score'] >= 70 and not old else 'surge' if old and s['score'] - old.get('score', 0) >= 15 else None
         if kind and channels and row.get('fresh', False):
             text = ('🚨 股票即时信号' if kind == 'new_hot' else '📈 股票评分跃升') + '\n' + fmt(row, s)
-            for ch in channels: store.enqueue(f'{VERSION}:event:{kind}:{key}:{int(now//1800)}:{ch}', {'channel': ch, 'text': text}, now)
-            events.append({'kind': kind, 'symbol': key, 'score': s['score']})
+            track_key=f'{VERSION}:event:{kind}:{key}:{int(now//1800)}'
+            for ch in channels: store.enqueue(f'{track_key}:{ch}', {'channel': ch, 'text': text}, now)
+            events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_group(row), 'payload': {'score': s, 'theme': row.get('theme'), 'risk': s.get('risk', [])}})
     store.put('scores', current)
+    with store.db() as d:
+        for row in rows:
+            if row.get('fresh') and isinstance(row.get('price'), (int,float)) and row['price']>0:
+                observe_forward(d,row['symbol'],row['price'],now)
+        for event in events:
+            register_forward(d,event['track_key'],event['instrument_key'],event['symbol'],event['market'],event['entry'],event['payload'],now)
     for row in rows: store.put('row:' + row['symbol'], row)
     fresh_rows = [r for r in rows if r.get('fresh', False)]
     # Separate queue keys prevent one market suppressing another market later in the hour.
@@ -70,6 +78,7 @@ def cycle(cfg, store, collector=None, universe=None):
         text += '\n\n'.join(f'{i+1}. {fmt(r, r["score_meta"])}' for i, r in enumerate(group[:5]))
         for ch in channels:
             store.enqueue(f'{VERSION}:ranking:{label}:{bucket}:{ch}', {'channel': ch, 'market': label, 'text': text}, now)
-    report = {'version': VERSION, 'as_of': now, 'markets': grouped_rows(rows), 'rows': rows, 'events': events, 'sources': statuses,
+    with store.db() as d: forward=forward_summary(d)
+    report = {'version': VERSION, 'as_of': now, 'forward': forward, 'markets': grouped_rows(rows), 'rows': rows, 'events': events, 'sources': statuses,
               'errors': [s for s in statuses if s['status'] != 'ok'], 'notice': '主题标签用于研究分类，不等于公司获得订单、政策支持或股价必涨。'}
     store.put('latest', report); store.cleanup(now); return report

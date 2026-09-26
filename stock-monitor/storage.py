@@ -5,6 +5,8 @@ class Store:
  def __init__(self,folder):
   self.folder=Path(folder);self.folder.mkdir(parents=True,exist_ok=True);self.path=self.folder/'stock-radar.sqlite'
   with self.db() as d:d.executescript('''CREATE TABLE IF NOT EXISTS pairs(key TEXT PRIMARY KEY,observed REAL,payload TEXT);CREATE TABLE IF NOT EXISTS signals(key TEXT PRIMARY KEY,created REAL,payload TEXT);CREATE TABLE IF NOT EXISTS runtime(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS outbox(key TEXT PRIMARY KEY,created REAL,payload TEXT,state TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_try REAL DEFAULT 0,sent REAL,error TEXT);''')
+  from forward import initialize as initialize_forward
+  with self.db() as d: initialize_forward(d)
  @contextlib.contextmanager
  def db(self):
   d=sqlite3.connect(self.path,timeout=15);d.row_factory=sqlite3.Row

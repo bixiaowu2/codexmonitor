@@ -6,6 +6,7 @@ from radar import cycle, grouped_rows, market_group, market_label
 from scoring import score
 from sources import parse_chart
 from storage import Store
+from forward import initialize as initialize_forward, register as register_forward, observe as observe_forward, summary as forward_summary
 
 class TestStock(unittest.TestCase):
     def setUp(self):
@@ -90,5 +91,21 @@ class TestStock(unittest.TestCase):
         row={'symbol':'0981.HK','region':'中国香港','market_group':'中国股票','market_subgroup':'港股'}
         self.assertEqual(market_group(row),'中国股票')
         self.assertEqual(market_label(row),'中国股票·港股')
+
+    def test_forward_ledger_records_horizons_and_peak(self):
+        now=1000000.0
+        with self.store.db() as d:
+            initialize_forward(d)
+            self.assertTrue(register_forward(d,'track-1','asset-1','TEST','test',10.0,{'source':'unit'},now))
+            observe_forward(d,'asset-1',12.0,now+3600)
+            observe_forward(d,'asset-1',8.0,now+21600)
+            observe_forward(d,'asset-1',11.0,now+86400)
+            observe_forward(d,'asset-1',10.0,now+604800)
+            row=d.execute('select * from forward_tracks where key=?',('track-1',)).fetchone()
+            self.assertEqual(row['status'],'complete')
+            marks=json.loads(row['marks'])
+            self.assertAlmostEqual(marks['1h']['return'],0.2)
+            self.assertAlmostEqual(marks['6h']['peak_multiple'],1.2)
+            self.assertEqual(forward_summary(d)['complete'],1)
 
 if __name__ == '__main__': unittest.main()

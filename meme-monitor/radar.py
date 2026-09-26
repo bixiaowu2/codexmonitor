@@ -5,6 +5,7 @@ from inputs import enrich,wallet_index,kol_events,x_mentions,shared_x_mentions
 from scoring import score
 from sources import Collector
 from storage import Store
+from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 VERSION='meme-v0.3'
 
 def fmt(p,s):
@@ -35,8 +36,6 @@ def event_text(p, s, kind, previous=None):
 
 def enqueue_events(cfg, store, rows, previous, now):
     channels = [name for name, on in [('telegram', cfg.telegram_enabled), ('dingtalk', cfg.dingtalk_enabled)] if on]
-    if not channels:
-        return []
     events = []
     for p in rows:
         s = p['score_meta']; key = p['chain'] + ':' + p['address']; old = previous.get(key)
@@ -50,9 +49,10 @@ def enqueue_events(cfg, store, rows, previous, now):
         if not kind:
             continue
         body = event_text(p, s, kind, old)
+        track_key=f'{VERSION}:event:{kind}:{key}:{int(now//1800)}'
         for channel in channels:
-            store.enqueue(f'{VERSION}:event:{kind}:{key}:{int(now//1800)}:{channel}', {'channel': channel, 'text': body}, now)
-        events.append({'kind': kind, 'chain': p['chain'], 'address': p['address'], 'score': s['score']})
+            store.enqueue(f'{track_key}:{channel}', {'channel': channel, 'text': body}, now)
+        events.append({'kind': kind, 'chain': p['chain'], 'address': p['address'], 'score': s['score'], 'track_key': track_key, 'entry': p.get('price_usd'), 'instrument_key': key, 'market': p['chain'], 'payload': {'score': s, 'reasons': s.get('reasons', []), 'risk': s.get('risk', [])}})
     return events
 
 def cycle(cfg,store,collector=None):
@@ -78,6 +78,12 @@ def cycle(cfg,store,collector=None):
     store.put('candidate_scores', current)
     completed=time.time()
     with store.db() as d:
+        for p in rows:
+            price=p.get('price_usd')
+            if isinstance(price,(int,float)) and price>0:
+                observe_forward(d,p['chain']+':'+p['address'],price,now)
+        for event in events:
+            register_forward(d,event['track_key'],event['instrument_key'],event['chain']+':'+event['address'],event['market'],event['entry'],event['payload'],now)
         for p in pairs:d.execute('INSERT OR REPLACE INTO pairs VALUES(?,?,?)',(p['chain']+':'+p['address']+':'+p['pair_address'],completed,json.dumps(p,ensure_ascii=False)))
         for p in rows:
             key=f'{VERSION}:{p["chain"]}:{p["address"]}:{int(now//900)}'
@@ -91,7 +97,8 @@ def cycle(cfg,store,collector=None):
         body+='\n\n'.join(f'{i+1}. '+fmt(p,p['score_meta']) for i,p in enumerate(rows[:5]))
         for channel in channels:store.enqueue(f'{VERSION}:ranking:{int(now//3600)}:{channel}',{'channel':channel,'text':body},completed)
     chains={chain:{'pairs':sum(p['chain']==chain for p in pairs),'candidates':sum(p['chain']==chain for p in rows),'status':'ok' if all(s['status'] in ('ok','empty') for s in statuses if s['chain']==chain) else 'partial'} for chain in cfg.chains}
-    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'social':social_health,
+    with store.db() as d: forward=forward_summary(d)
+    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,
             'notice':'公开DEX样本候选，不保证为Meme。X帖子来自共享采集或可选证据文件；提及不代表支持，不增加买入评分。钱包尚未自动跟踪。合约安全、集中度、解锁未知。'}
     store.put('latest',report);store.cleanup(completed);return report
 

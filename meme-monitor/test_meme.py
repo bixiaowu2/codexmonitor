@@ -6,6 +6,7 @@ from scoring import score,age_minutes
 from sources import NETWORK,Collector,normalize_pair,parse_gecko,profile_addresses
 from net import FetchError
 from storage import Store
+from forward import initialize as initialize_forward, register as register_forward, observe as observe_forward, summary as forward_summary
 from inputs import enrich,kol_events
 from radar import cycle
 from cloud import deliver_one
@@ -89,5 +90,30 @@ class TestMeme(unittest.TestCase):
    deliver_one(cfg,self.store);deliver_one(cfg,self.store);self.assertEqual(send.call_count,2)
   with self.store.db() as d:states={r['key']:r['state'] for r in d.execute('SELECT * FROM outbox')}
   self.assertEqual(states,{'telegram':'sent','dingtalk':'pending'})
+
+ def test_forward_ledger_records_horizons_and_peak(self):
+     now=1000000.0
+     with self.store.db() as d:
+         initialize_forward(d)
+         self.assertTrue(register_forward(d,'track-1','asset-1','TEST','test',10.0,{'source':'unit'},now))
+         observe_forward(d,'asset-1',12.0,now+3600)
+         observe_forward(d,'asset-1',8.0,now+21600)
+         observe_forward(d,'asset-1',11.0,now+86400)
+         observe_forward(d,'asset-1',10.0,now+604800)
+         row=d.execute('select * from forward_tracks where key=?',('track-1',)).fetchone()
+         self.assertEqual(row['status'],'complete')
+         marks=json.loads(row['marks'])
+         self.assertAlmostEqual(marks['1h']['return'],0.2)
+         self.assertAlmostEqual(marks['6h']['peak_multiple'],1.2)
+         self.assertEqual(forward_summary(d)['complete'],1)
+
+ def test_forward_ledger_works_when_notifications_disabled(self):
+  c=Collector(spacing=0)
+  p=self.pool(liquidity_usd=100000,volume_1h=250000,change_1h=30)
+  with patch.object(c,'collect',return_value=([p],[])):
+   report=cycle(self.cfg,self.store,c)
+  self.assertEqual(report['events'][0]['kind'],'new_hot')
+  self.assertEqual(report['forward']['tracks'],1)
+  with self.store.db() as d:self.assertEqual(d.execute("SELECT count(*) FROM outbox").fetchone()[0],0)
 
 if __name__=='__main__':unittest.main()
