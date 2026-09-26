@@ -7,3 +7,9 @@ __pycache__/
 *.pyc
 outputs/
 work/
+
+# Environment backups and local credentials in all programs
+.env.*
+!.env.example
+*.key
+*.pem

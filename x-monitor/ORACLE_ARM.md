@@ -1,5 +1,7 @@
 # Oracle Ubuntu 24.04 ARM 部署
 
+从 GitHub 克隆本仓库后，先进入 `x-monitor/` 子目录；下文命令均在该目录执行。
+
 目标环境：Ubuntu 24.04.4 LTS，6.17.0-1011-oracle，aarch64。
 
 预设监控账号：`binancezh`、`cz_binance`、`heyibinance`；CZ 账号已按用户更正为 `cz_binance`。运行方式为普通 Chromium + Xvfb。默认同时推送 Telegram 和钉钉，企业微信可不配置。
