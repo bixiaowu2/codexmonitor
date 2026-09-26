@@ -6,7 +6,7 @@ from sources import Collector, load_universe
 from scoring import score
 from storage import Store
 
-VERSION = 'stock-v0.3'
+VERSION = 'stock-v0.4'
 
 def market_group(row):
     explicit = row.get('market_group')
@@ -28,11 +28,15 @@ def grouped_rows(rows):
         group.sort(key=lambda r: (-r.get('score_meta', {}).get('score', 0), r['symbol']))
     return groups
 
+def market_label(row):
+    subgroup = row.get('market_subgroup')
+    return f'{market_group(row)}·{subgroup}' if subgroup else market_group(row)
+
 def fmt(row, s):
     change = f'{row["change"]:.1f}%' if row.get('change') is not None else '未知'
     ratio = f'{row["volume_ratio"]:.1f}' if row.get('volume_ratio') is not None else '未知'
     quote_time = datetime.fromtimestamp(row['quote_at'], timezone.utc).strftime('%m-%d %H:%M UTC')
-    return (f'📊 {market_group(row)} · {row["name"]} ({row["symbol"]})\n主题：{row["theme"]} · {row["region"]}\n'
+    return (f'📊 {market_label(row)} · {row["name"]} ({row["symbol"]})\n主题：{row["theme"]} · {row["region"]}\n'
             f'关注分 {s["score"]}/100；最新价 {row.get("price")} {row.get("currency") or ""}；较上交易日末根有效K线 {change}\n'
             f'5分钟成交量基准倍数 {ratio}；{"、".join(s["reasons"])}\n风险：{"；".join(s["risk"])}\n'
             f'行情截至 {quote_time}；公开行情可能延迟。\n这是研究提醒，主题事件尚未自动验证。')

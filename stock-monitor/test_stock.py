@@ -2,7 +2,7 @@ import json, tempfile, unittest, time
 from pathlib import Path
 from unittest.mock import patch
 from config import Config
-from radar import cycle, grouped_rows, market_group
+from radar import cycle, grouped_rows, market_group, market_label
 from scoring import score
 from sources import parse_chart
 from storage import Store
@@ -85,5 +85,10 @@ class TestStock(unittest.TestCase):
         groups={r['symbol']:market_group(r) for r in universe}
         for symbol in ('ASML','TSM','ARM'):self.assertEqual(groups[symbol],'美国股票')
         self.assertEqual(groups['005930.KS'],'其他市场')
+
+    def test_hk_stock_is_china_group_with_hk_label(self):
+        row={'symbol':'0981.HK','region':'中国香港','market_group':'中国股票','market_subgroup':'港股'}
+        self.assertEqual(market_group(row),'中国股票')
+        self.assertEqual(market_label(row),'中国股票·港股')
 
 if __name__ == '__main__': unittest.main()

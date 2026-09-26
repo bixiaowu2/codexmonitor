@@ -142,5 +142,86 @@
     "theme": "AI产业链·服务器",
     "theme_weight": 25,
     "market_group": "美国股票"
+  },
+  {
+    "symbol": "0981.HK",
+    "name": "中芯国际",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "自主可控·晶圆制造",
+    "theme_weight": 35
+  },
+  {
+    "symbol": "1347.HK",
+    "name": "华虹半导体",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "自主可控·特色工艺晶圆",
+    "theme_weight": 35
+  },
+  {
+    "symbol": "0522.HK",
+    "name": "ASMPT",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "供应链替代·半导体封装设备",
+    "theme_weight": 30
+  },
+  {
+    "symbol": "0700.HK",
+    "name": "腾讯控股",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "AI产业链·云与大模型应用",
+    "theme_weight": 30
+  },
+  {
+    "symbol": "9988.HK",
+    "name": "阿里巴巴",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "AI产业链·云计算与模型",
+    "theme_weight": 30
+  },
+  {
+    "symbol": "9888.HK",
+    "name": "百度集团",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "AI产业链·模型与自动驾驶",
+    "theme_weight": 30
+  },
+  {
+    "symbol": "0020.HK",
+    "name": "商汤",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "AI产业链·视觉与大模型",
+    "theme_weight": 25
+  },
+  {
+    "symbol": "2382.HK",
+    "name": "舜宇光学科技",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "AI产业链·光学与传感器",
+    "theme_weight": 25
+  },
+  {
+    "symbol": "1810.HK",
+    "name": "小米集团",
+    "region": "中国香港",
+    "market_group": "中国股票",
+    "market_subgroup": "港股",
+    "theme": "自主可控·智能终端与汽车",
+    "theme_weight": 25
   }
 ]
