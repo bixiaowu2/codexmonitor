@@ -64,6 +64,15 @@ class TestMeme(unittest.TestCase):
    report=cycle(self.cfg,self.store,c)
   self.assertEqual(report['candidates'],1);self.assertEqual(report['rows'][0]['pair_address'],'0xcd')
   with self.store.db() as d:self.assertEqual(d.execute('SELECT count(*) FROM outbox').fetchone()[0],0);self.assertEqual(d.execute('SELECT count(*) FROM signals').fetchone()[0],1)
+ def test_hot_event_is_queued_once_per_cooldown(self):
+  from dataclasses import replace
+  cfg=replace(self.cfg,telegram_enabled=True,dingtalk_enabled=False,telegram_token='1:x',telegram_chat='1')
+  c=Collector(spacing=0);p=self.pool(liquidity_usd=100000,volume_1h=250000,change_1h=30)
+  with patch.object(c,'collect',return_value=([p],[])):
+   first=cycle(cfg,self.store,c);second=cycle(cfg,self.store,c)
+  self.assertEqual(first['events'][0]['kind'],'new_hot')
+  self.assertEqual(second['events'],[])
+  with self.store.db() as d:self.assertEqual(d.execute("SELECT count(*) FROM outbox WHERE state='pending'").fetchone()[0],2)
  def test_stale_and_legacy_queue_expired(self):
   self.store.enqueue('old',{'channel':'telegram','text':'x'},time.time()-901);self.store.enqueue('legacy',{'text':'x'});self.store.cleanup()
   with self.store.db() as d:self.assertEqual(d.execute("SELECT count(*) FROM outbox WHERE state='pending'").fetchone()[0],0)

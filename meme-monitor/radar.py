@@ -18,6 +18,43 @@ def fmt(p,s):
             f'{social}风险：{risk}\n合约 {p["address"]}\n{p.get("url","")}\n'
             '这是研究提醒，不自动交易，不代表100倍概率。')
 
+def event_text(p, s, kind, previous=None):
+    title = {'new_hot': '🚨 Meme即时信号', 'surge': '📈 Meme评分跃升', 'risk': '⚠️ Meme风险变化'}.get(kind, '🔔 Meme事件')
+    detail = {
+        'new_hot': '首次进入高分区',
+        'surge': f'评分由{previous.get("score", 0):g}升至{s["score"]:g}' if previous else '评分明显上升',
+        'risk': '评分或流动性明显恶化',
+    }[kind]
+    risk = '；'.join(s.get('risk') or [])
+    return (f'{title} · {p["symbol"]} · {p["chain"]}\n'
+            f'{detail}，当前关注分 {s["score"]}/100\n'
+            f'价格 {p.get("price_usd")} USD；池流动性 {p.get("liquidity_usd")} USD；1h成交额 {p.get("volume_1h")} USD\n'
+            f'{"、".join(s.get("reasons") or [])}\n风险：{risk}\n'
+            f'合约 {p["address"]}\n{p.get("url", "")}\n'
+            '这是条件式研究提醒，不自动交易，也不代表100倍概率。')
+
+def enqueue_events(cfg, store, rows, previous, now):
+    channels = [name for name, on in [('telegram', cfg.telegram_enabled), ('dingtalk', cfg.dingtalk_enabled)] if on]
+    if not channels:
+        return []
+    events = []
+    for p in rows:
+        s = p['score_meta']; key = p['chain'] + ':' + p['address']; old = previous.get(key)
+        kind = None
+        if s['score'] >= 70 and not old:
+            kind = 'new_hot'
+        elif old and s['score'] - old.get('score', 0) >= 15:
+            kind = 'surge'
+        elif old and (old.get('liquidity_usd') or 0) > 0 and (p.get('liquidity_usd') or 0) <= old['liquidity_usd'] * 0.6:
+            kind = 'risk'
+        if not kind:
+            continue
+        body = event_text(p, s, kind, old)
+        for channel in channels:
+            store.enqueue(f'{VERSION}:event:{kind}:{key}:{int(now//1800)}:{channel}', {'channel': channel, 'text': body}, now)
+        events.append({'kind': kind, 'chain': p['chain'], 'address': p['address'], 'score': s['score']})
+    return events
+
 def cycle(cfg,store,collector=None):
     now=time.time(); collector=collector or Collector(cfg.timeout)
     pairs,statuses=collector.collect(cfg.chains)
@@ -35,6 +72,10 @@ def cycle(cfg,store,collector=None):
         if s['score']>0:rows.append(p)
     rows.sort(key=lambda p:(-p['score_meta']['score'],p['chain'],p['address']))
     rows=rows[:cfg.max_candidates]
+    previous = store.state('candidate_scores', {}) or {}
+    events = enqueue_events(cfg, store, rows, previous, now)
+    current = {p['chain'] + ':' + p['address']: {'score': p['score_meta']['score'], 'liquidity_usd': p.get('liquidity_usd') or 0} for p in rows}
+    store.put('candidate_scores', current)
     completed=time.time()
     with store.db() as d:
         for p in pairs:d.execute('INSERT OR REPLACE INTO pairs VALUES(?,?,?)',(p['chain']+':'+p['address']+':'+p['pair_address'],completed,json.dumps(p,ensure_ascii=False)))
@@ -50,7 +91,7 @@ def cycle(cfg,store,collector=None):
         body+='\n\n'.join(f'{i+1}. '+fmt(p,p['score_meta']) for i,p in enumerate(rows[:5]))
         for channel in channels:store.enqueue(f'{VERSION}:ranking:{int(now//3600)}:{channel}',{'channel':channel,'text':body},completed)
     chains={chain:{'pairs':sum(p['chain']==chain for p in pairs),'candidates':sum(p['chain']==chain for p in rows),'status':'ok' if all(s['status'] in ('ok','empty') for s in statuses if s['chain']==chain) else 'partial'} for chain in cfg.chains}
-    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'social':social_health,
+    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'social':social_health,
             'notice':'公开DEX样本候选，不保证为Meme。X帖子来自共享采集或可选证据文件；提及不代表支持，不增加买入评分。钱包尚未自动跟踪。合约安全、集中度、解锁未知。'}
     store.put('latest',report);store.cleanup(completed);return report
 
