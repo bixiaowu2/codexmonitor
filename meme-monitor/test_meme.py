@@ -46,6 +46,12 @@ class TestMeme(unittest.TestCase):
    p,s=c.collect(['arc']);self.assertEqual([x['status'] for x in s],['failed','empty']);self.assertEqual(s[0]['error'],'http_429')
   with patch('sources.get_json',return_value={'data':[]}) as get:
    p,s=c.collect(['arc']);self.assertEqual(s[0]['status'],'backoff');self.assertEqual(get.call_count,1)
+ def test_retry_after_extends_provider_backoff(self):
+  c=Collector(spacing=0)
+  with patch('sources.get_json',side_effect=FetchError('http_429',retry_after=600)):
+   _,statuses=c.collect(['arc'])
+  self.assertEqual(statuses[0]['retry_after'],600)
+  self.assertGreaterEqual(statuses[0]['retry_at']-time.time(),599)
  def test_low_liquidity_block(self):self.assertEqual(score(self.pool(liquidity_usd=100))['score'],0)
  def test_missing_volume_block(self):self.assertEqual(score(self.pool(volume_1h=None))['score'],0)
  def test_overextension_penalty(self):self.assertLess(score(self.pool(change_5m=50))['score'],score(self.pool(change_5m=5))['score'])

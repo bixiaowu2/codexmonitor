@@ -83,9 +83,10 @@ class Collector:
                 except Exception as e:
                     code=e.code if isinstance(e,FetchError) else type(e).__name__
                     self.failures[key]=self.failures.get(key,0)+1
-                    delay=min(900,60*2**min(self.failures[key]-1,4))
+                    suggested=getattr(e,'retry_after',None)
+                    delay=min(900,max(60*2**min(self.failures[key]-1,4),suggested or 0))
                     self.backoff[key]=time.time()+delay
-                    status.update(status='failed',error=code,retry_at=self.backoff[key])
+                    status.update(status='failed',error=code,retry_at=self.backoff[key],retry_after=suggested)
                 statuses.append(status)
         # Independent discovery source for verified DexScreener chain identifiers.
         dex_chains=[c for c in chains if c in ('bsc','solana','robinhood')]
@@ -100,7 +101,7 @@ class Collector:
                 profiles.extend(data)
             except Exception as e:
                 discovery_errors.append(e.code if isinstance(e,FetchError) else type(e).__name__)
-                self.backoff[key]=time.time()+120
+                self.backoff[key]=time.time()+max(120,getattr(e,'retry_after',0) or 0)
         for chain in dex_chains:
             status={'chain':chain,'provider':'dexscreener','endpoint':'profile_boost_tokens','as_of':time.time(),'count':0}
             addresses=profile_addresses(profiles,chain)
@@ -121,7 +122,7 @@ class Collector:
                 if discovery_errors:status.update(status='partial',error=','.join(sorted(set(discovery_errors))))
             except Exception as e:
                 code=e.code if isinstance(e,FetchError) else type(e).__name__
-                if code!='backoff':self.backoff[key]=time.time()+120
+                if code!='backoff':self.backoff[key]=time.time()+max(120,getattr(e,'retry_after',0) or 0)
                 status.update(status='failed',error=code)
             statuses.append(status)
         return list(pairs.values()),statuses
