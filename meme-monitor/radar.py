@@ -22,6 +22,23 @@ def safety_text(p):
     return line
 
 
+def data_quality(statuses, social_health):
+    """Turn raw provider states into a compact, actionable quality summary."""
+    counts={}
+    for s in statuses:
+        state=s.get('status','unknown')
+        if state not in ('ok','empty'):
+            reason=s.get('error') or state
+            counts[reason]=counts.get(reason,0)+1
+    if social_health.get('status') not in ('ok','disabled'):
+        counts['x-monitor:'+str(social_health.get('status'))]=1
+    chains={}
+    for chain in sorted({s.get('chain') for s in statuses if s.get('chain')}):
+        ss=[s for s in statuses if s.get('chain')==chain]
+        good=sum(s.get('status') in ('ok','empty') for s in ss)
+        chains[chain]={'ok_endpoints':good,'endpoints':len(ss),'status':'ok' if good==len(ss) else 'partial'}
+    return {'issue_counts':counts,'chains':chains,'social':social_health}
+
 def fmt(p,s):
     risk='；'.join(s.get('risk') or [])
     safety_line=safety_text(p)
@@ -156,6 +173,10 @@ def cycle(cfg,store,collector=None):
         body='Meme雷达 每小时关注排序（样本排名，不代表全链覆盖）\n'+time.strftime('%Y-%m-%d %H:%M UTC',time.gmtime(completed))+'\n'
         body+='数据状态：'+('数据或安全覆盖不完整' if errors else '本轮接口正常')+'\n\n'
         body+=f'安全统计：safe {safety_counts["safe"]} / blocked {safety_counts["blocked"]} / unknown {safety_counts["unknown"]} / disabled {safety_counts["disabled"]}\n\n'
+        quality=data_quality(statuses,social_health)
+        issue='；'.join(f'{k}×{v}' for k,v in sorted(quality['issue_counts'].items()))
+        if issue: body+='数据缺失分类：'+issue+'\n'
+        body+='链覆盖：'+'；'.join(f'{c} {v["status"]} {v["ok_endpoints"]}/{v["endpoints"]}' for c,v in quality['chains'].items())+'\n\n'
         ranked=[]
         for i,p in enumerate(rows[:5]):
             part=f'{i+1}. '+fmt(p,p['score_meta'])
@@ -165,7 +186,7 @@ def cycle(cfg,store,collector=None):
         for channel in channels:store.enqueue(f'{VERSION}:ranking:{int(now//3600)}:{channel}',{'channel':channel,'text':body,'kind':'ranking','instrument_keys':[p['chain']+':'+p['address'] for p in ranked]},completed)
     chains={chain:{'pairs':sum(p['chain']==chain for p in pairs),'candidates':sum(p['chain']==chain for p in rows),'status':'ok' if all(s['status'] in ('ok','empty') for s in statuses if s['chain']==chain) else 'partial'} for chain in cfg.chains}
     with store.db() as d: forward=forward_summary(d)
-    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,'safety':safety_counts,'blocked_rows':[p for p in assessed if p['safety_status']=='blocked'][:20],
+    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,'data_quality':data_quality(statuses,social_health),'safety':safety_counts,'blocked_rows':[p for p in assessed if p['safety_status']=='blocked'][:20],
             'notice':'公开DEX样本候选，不保证为Meme。安全检查来自第三方字段，未自行模拟买卖，不能保证可卖；unknown/disabled/有警告只做观察，不触发积极即时信号。LP锁仓、关联钱包和解锁未验证。X帖子来自共享采集或可选证据文件；提及不代表支持，不增加买入评分。钱包尚未自动跟踪。'}
     store.put('latest',report);store.cleanup(completed);return report
 

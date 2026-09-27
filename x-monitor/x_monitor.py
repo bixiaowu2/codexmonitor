@@ -500,8 +500,19 @@ def health_check(state_path: Path, accounts: list[str]) -> int:
     return 0
 
 
+def scrape_error_category(error: str | None) -> str:
+    text=(error or '').lower()
+    if 'http 401' in text or 'http 403' in text or 'login' in text or 'access' in text:
+        return '访问/登录限制'
+    if 'no tweet cards' in text or 'selector' in text or 'parseable tweets' in text:
+        return '页面结构或内容为空'
+    if 'timeout' in text or 'network' in text or 'http 5' in text:
+        return '网络或超时'
+    return '其他抓取异常'
+
 def record_scrape_health(state: dict[str, Any], account: str, success: bool,
-                         routes: dict[str, list[WebhookTarget]], path: Path) -> None:
+                         routes: dict[str, list[WebhookTarget]], path: Path,
+                         error: str | None = None) -> None:
     health = state.setdefault("health", {"accounts": {}})
     health["heartbeat"] = time.time()
     entry = health["accounts"].setdefault(account, {"failures": 0, "last_success": 0, "alerted": False, "last_alert": 0})
@@ -509,12 +520,16 @@ def record_scrape_health(state: dict[str, Any], account: str, success: bool,
     if success:
         entry["last_success"] = time.time()
         entry["failures"] = 0
+        entry['last_error']=None
+        entry['error_category']=None
     else:
         entry["failures"] += 1
+        entry['last_error']=(error or 'unknown')[:180]
+        entry['error_category']=scrape_error_category(error)
     needs_alert = entry["failures"] >= 3 and time.time() - entry["last_alert"] >= 1800
     if recovery or needs_alert:
         message = ("监控恢复：已重新读取该账号页面。" if recovery else
-                   "监控异常：连续三次无法读取该账号页面，请检查 X 登录状态、网络和访问限制。当前不能保证五分钟内推送。")
+                   f'监控异常：连续三次无法读取该账号页面；分类：{entry.get("error_category","其他抓取异常")}。请检查 X 登录状态、网络和访问限制。当前不能保证五分钟内推送。')
         notice = Tweet(account, "health", f"https://x.com/{account}", message, datetime.now(timezone.utc).isoformat(), "监控状态")
         try:
             notify(notice, routes)
@@ -599,7 +614,7 @@ def run() -> int:
                     except Exception as exc:
                         cycle_ok = False
                         LOG.error("check failed for @%s: %s", account, exc)
-                        record_scrape_health(state, account, False, routes, state_path)
+                        record_scrape_health(state, account, False, routes, state_path, str(exc))
                         if feed and account in registry:
                             try: feed.failure(account,type(exc).__name__,registry[account]['interval_seconds'])
                             except Exception: LOG.error('public feed health write failed')
@@ -615,7 +630,7 @@ def run() -> int:
                         except Exception as exc:
                             cycle_ok = False
                             feed.failure(account,type(exc).__name__,registry[account]['interval_seconds'])
-                            record_scrape_health(state,account,False,routes,state_path)
+                            record_scrape_health(state,account,False,routes,state_path,str(exc))
                             LOG.warning('extra account @%s failed: %s',account,type(exc).__name__)
                             if page.is_closed(): raise RuntimeError('browser page closed') from exc
                         deliver_pending(state,routes,state_path)

@@ -62,6 +62,9 @@ def format_message(rows,now=None,coverage=None,previous=None):
     lines=[f'📊 候选关注排序 · 北京时间{local} · {VERSION}',
            'Alpha＋合约优先，最多5名；关注分不是百倍概率，不自动建仓。',
            f'本轮尝试{coverage.get("checked",0)}个，缺新鲜报价跳过{coverage.get("skipped",0)}个；数据异常{coverage.get("errors",0)}项。']
+    detail=coverage.get('error_breakdown') or {}
+    if detail:
+        lines.append('数据缺失分类：'+'；'.join(f'{k}×{v}' for k,v in sorted(detail.items())))
     if not rows:lines.append('本轮无合格候选，不凑数；缺失数据不代表没有机会。')
     for i,r in enumerate(rows,1):
         old=previous.get(r['address']);change='新入榜' if old is None else ('持平' if old==i else f'{"上升" if old>i else "下降"}{abs(old-i)}位')
@@ -81,8 +84,14 @@ def maybe_emit(store,report,now=None,interval=None):
     now=time.time() if now is None else now;interval=interval_seconds() if interval is None else interval
     bucket=int(now//interval);key=f'ranking:{VERSION}:{bucket}'
     rows=rank((report or {}).get('observations',[]),now)
-    coverage={'checked':(report or {}).get('checked',0),'skipped':len((report or {}).get('skipped',[])),
-              'errors':len((report or {}).get('errors',[])) if report else 1}
+    skipped=(report or {}).get('skipped',[])
+    errors=(report or {}).get('errors',[])
+    breakdown={}
+    for item in list(skipped)+list(errors):
+        reason=item.get('error','unknown') if isinstance(item,dict) else str(item)
+        breakdown[reason]=breakdown.get(reason,0)+1
+    coverage={'checked':(report or {}).get('checked',0),'skipped':len(skipped),
+              'errors':len(errors) if report else 1,'error_breakdown':breakdown}
     with store.db() as db:
         db.execute('BEGIN IMMEDIATE')
         r=db.execute("SELECT value FROM runtime WHERE key='ranking_last_bucket'").fetchone()

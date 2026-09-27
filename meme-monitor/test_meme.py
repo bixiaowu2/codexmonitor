@@ -8,7 +8,7 @@ from net import FetchError
 from storage import Store
 from forward import initialize as initialize_forward, register as register_forward, observe as observe_forward, summary as forward_summary
 from inputs import enrich,kol_events
-from radar import cycle
+from radar import cycle,data_quality
 from cloud import deliver_one
 from notify import send_channel
 
@@ -96,6 +96,12 @@ class TestMeme(unittest.TestCase):
    deliver_one(cfg,self.store);deliver_one(cfg,self.store);self.assertEqual(send.call_count,2)
   with self.store.db() as d:states={r['key']:r['state'] for r in d.execute('SELECT * FROM outbox')}
   self.assertEqual(states,{'telegram':'sent','dingtalk':'pending'})
+ def test_data_quality_explains_backoff_and_chain_coverage(self):
+  q=data_quality([{'chain':'xlayer','status':'backoff'},{'chain':'bsc','status':'failed','error':'http_429'},{'chain':'bsc','status':'ok'}],{'status':'partial'})
+  self.assertEqual(q['issue_counts']['backoff'],1)
+  self.assertEqual(q['issue_counts']['http_429'],1)
+  self.assertEqual(q['issue_counts']['x-monitor:partial'],1)
+  self.assertEqual(q['chains']['bsc'],{'ok_endpoints':1,'endpoints':2,'status':'partial'})
 
  def test_forward_ledger_records_horizons_and_peak(self):
      now=1000000.0

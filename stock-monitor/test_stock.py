@@ -2,7 +2,7 @@ import json, tempfile, unittest, time
 from pathlib import Path
 from unittest.mock import patch
 from config import Config
-from radar import cycle, grouped_rows, market_group, market_label
+from radar import cycle, grouped_rows, market_group, market_label, data_quality
 from scoring import score
 from sources import parse_chart
 from storage import Store
@@ -22,6 +22,16 @@ class TestStock(unittest.TestCase):
     def test_parse_and_score(self):
         row = parse_chart(self.chart(), {'symbol':'NVDA','name':'NVIDIA','theme':'AI','region':'US','theme_weight':35})
         self.assertAlmostEqual(row['change'], 9.09, places=1); self.assertGreater(score(row)['score'], 35)
+
+    def test_stale_quote_has_explicit_reason(self):
+        raw=self.chart(); raw['chart']['result'][0]['timestamp']=[t-86400*3 for t in raw['chart']['result'][0]['timestamp']]
+        row=parse_chart(raw, {'symbol':'NVDA','region':'US'})
+        self.assertFalse(row['fresh']); self.assertIn(row['fresh_reason'], {'market_closed_weekend','quote_stale_or_market_closed'})
+        self.assertGreater(row['quote_age_seconds'], 900)
+
+    def test_data_quality_counts_stale_reasons_and_source_errors(self):
+        q=data_quality([{'fresh':False,'fresh_reason':'market_closed_weekend'},{'fresh':True}], [{'symbol':'X','status':'failed'}])
+        self.assertEqual(q['fresh_rows'],1); self.assertEqual(q['stale_reasons']['market_closed_weekend'],1); self.assertEqual(q['source_errors'],1)
     def test_cycle_queues_ranking_once(self):
         from dataclasses import replace
         cfg = replace(self.cfg, telegram_enabled=True, telegram_token='1:x', telegram_chat='1')
@@ -43,7 +53,22 @@ class TestStock(unittest.TestCase):
         with patch('sources.get_json',return_value=raw):
             report=cycle(cfg,self.store,Collector(spacing=0),[{'symbol':'NVDA','name':'N','theme':'AI','region':'US','theme_weight':35}])
         self.assertFalse(report['rows'][0]['fresh'])
-        with self.store.db() as d:self.assertEqual(d.execute('SELECT count(*) FROM outbox').fetchone()[0],0)
+        with self.store.db() as d:
+            self.assertEqual(d.execute('SELECT count(*) FROM outbox').fetchone()[0],1)
+            payload=json.loads(d.execute('SELECT payload FROM outbox').fetchone()[0])
+            self.assertEqual(payload['market'],'status')
+
+    def test_closed_market_emits_one_daily_status_not_rankings(self):
+        from dataclasses import replace
+        from sources import Collector
+        raw=self.chart(); raw['chart']['result'][0]['timestamp']=[t-86400*3 for t in raw['chart']['result'][0]['timestamp']]
+        cfg=replace(self.cfg,telegram_enabled=True,telegram_token='1:x',telegram_chat='1')
+        universe=[{'symbol':'NVDA','name':'NVIDIA','theme':'AI','region':'US','theme_weight':35}]
+        with patch('sources.get_json',return_value=raw):
+            cycle(cfg,self.store,Collector(spacing=0),universe); cycle(cfg,self.store,Collector(spacing=0),universe)
+        with self.store.db() as d:
+            rows=d.execute("select key,payload from outbox where state='pending'").fetchall()
+        self.assertEqual(len(rows),1); self.assertIn('没有新鲜5分钟行情', json.loads(rows[0][1])['text'])
     def test_null_close_keeps_timestamp_alignment(self):
         raw=self.chart();r=raw['chart']['result'][0];r['indicators']['quote'][0]['close'][-1]=None
         parsed=parse_chart(raw,{'symbol':'NVDA'})

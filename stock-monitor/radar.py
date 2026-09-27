@@ -6,6 +6,7 @@ from sources import Collector, load_universe
 from scoring import score
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
+from collections import Counter
 
 VERSION = 'stock-v0.5.1'
 
@@ -32,6 +33,14 @@ def grouped_rows(rows):
 def market_label(row):
     subgroup = row.get('market_subgroup')
     return f'{market_group(row)}·{subgroup}' if subgroup else market_group(row)
+
+def data_quality(rows, statuses):
+    reasons=Counter(r.get('fresh_reason','unknown') for r in rows if not r.get('fresh'))
+    return {'rows':len(rows),'fresh_rows':sum(bool(r.get('fresh')) for r in rows),
+            'stale_rows':sum(not r.get('fresh') for r in rows),
+            'stale_reasons':dict(sorted(reasons.items())),
+            'source_errors':sum(s.get('status')!='ok' for s in statuses),
+            'source_error_symbols':[s.get('symbol') for s in statuses if s.get('status')!='ok']}
 
 def fmt(row, s):
     change = f'{row["change"]:.1f}%' if row.get('change') is not None else '未知'
@@ -79,6 +88,15 @@ def cycle(cfg, store, collector=None, universe=None):
         for ch in channels:
             store.enqueue(f'{VERSION}:ranking:{label}:{bucket}:{ch}', {'channel': ch, 'market': label, 'text': text}, now)
     with store.db() as d: forward=forward_summary(d)
+    quality=data_quality(rows,statuses)
+    if not fresh_rows:
+        status_key=f'{VERSION}:status:{time.strftime("%Y-%m-%d",time.gmtime(now))}'
+        if channels:
+            by_reason='；'.join(f'{k}×{v}' for k,v in quality['stale_reasons'].items()) or '无可用行情行'
+            status_text=('股票雷达状态：本轮没有新鲜5分钟行情，未推送即时排名或建立前瞻样本。\n'
+                         f'原因：{by_reason}；源错误 {quality["source_errors"]} 个。\n'
+                         '市场休市时保留上一根已收盘K线，仅作观察，不把旧价格当成当前买入信号。')
+            for ch in channels: store.enqueue(f'{status_key}:{ch}', {'channel':ch, 'market':'status', 'text':status_text}, now)
     report = {'version': VERSION, 'as_of': now, 'forward': forward, 'markets': grouped_rows(rows), 'rows': rows, 'events': events, 'sources': statuses,
-              'errors': [s for s in statuses if s['status'] != 'ok'], 'notice': '主题标签用于研究分类，不等于公司获得订单、政策支持或股价必涨。'}
+              'data_quality':quality,'errors': [s for s in statuses if s['status'] != 'ok'], 'notice': '主题标签用于研究分类，不等于公司获得订单、政策支持或股价必涨；缺少新鲜行情时不推送即时信号。'}
     store.put('latest', report); store.cleanup(now); return report

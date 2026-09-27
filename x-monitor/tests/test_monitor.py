@@ -232,6 +232,12 @@ class DingTalkKeywordTests(unittest.TestCase):
                 self.assertTrue(payload['title'].startswith('DT | '))
                 self.assertTrue(payload['text'].startswith('DT\n'))
 
+class ScrapeHealthCategoryTests(unittest.TestCase):
+    def test_error_categories_are_actionable(self):
+        self.assertEqual(m.scrape_error_category('X returned HTTP 403'), '访问/登录限制')
+        self.assertEqual(m.scrape_error_category('no tweet cards found'), '页面结构或内容为空')
+        self.assertEqual(m.scrape_error_category('webhook network error'), '网络或超时')
+
 
 if __name__ == '__main__':
     unittest.main()

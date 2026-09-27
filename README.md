@@ -7,7 +7,7 @@
 | [x-monitor](x-monitor/) | X 账户监控 | 采集公开 X 帖子并推送到 Telegram / 钉钉 |
 | [alpha-monitor](alpha-monitor/) | 币安 Alpha 监控 | Alpha 上市、合约交集、BSC 历史研究和候选排序 |
 | [meme-monitor](meme-monitor/) | 六链 Meme 雷达 | BSC、Solana、Robinhood、X Layer、Arc、Stable 池监控和定期排名 |
-| `stock-monitor/` | 股票监控 | 后续开发 |
+| [stock-monitor](stock-monitor/) | 股票监控 | A股、港股、美股及其他市场的产业链机会研究与前瞻账本 |
 
 三个现有程序在云服务器上分别由独立 systemd 服务管理，配置和状态目录互相隔离。仓库内的 `.env.example` 仅是模板；部署时在服务器创建实际 `.env` 或 `/etc/*-radar.env`。
 
@@ -17,6 +17,7 @@
 cd x-monitor && python3 -m unittest discover -s tests -v
 cd ../alpha-monitor && python3 -m unittest discover -v
 cd ../meme-monitor && python3 -m unittest -v
+cd ../stock-monitor && python3 -m unittest discover -p 'test_*.py' -v
 ```
 
 ## 安全边界

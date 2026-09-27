@@ -34,9 +34,18 @@ def parse_chart(raw, item):
         previous = earlier[-1][1] if earlier else None
         baseline_rows = [b[2] for b in bars[:-1][-20:]]
         baseline = statistics.median(baseline_rows) if len(baseline_rows) >= 5 else None
+        quote_at = ts + 300
+        age = now - quote_at
+        if 0 <= age <= 900:
+            freshness_reason = 'fresh'
+        elif datetime.fromtimestamp(now, timezone).weekday() >= 5:
+            freshness_reason = 'market_closed_weekend'
+        else:
+            freshness_reason = 'quote_stale_or_market_closed'
         return {**item, 'price': price, 'change': (price / previous - 1) * 100 if previous else None,
                 'volume': volume, 'volume_ratio': volume / baseline if baseline and baseline > 0 else None,
-                'observed_at': now, 'quote_at': ts + 300, 'fresh': 0 <= now - (ts + 300) <= 900,
+                'observed_at': now, 'quote_at': quote_at, 'quote_age_seconds': age,
+                'fresh_reason': freshness_reason, 'fresh': freshness_reason == 'fresh',
                 'currency': meta.get('currency'), 'exchange_timezone': str(timezone),
                 'data_interval': '5m', 'data_source': 'Yahoo Finance chart',
                 'change_basis': '上一交易日末根有效K线收盘价', 'volume_basis': '前20根有效5分钟K线成交量中位数（至少5根）'}
