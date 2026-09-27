@@ -7,7 +7,7 @@ from sources import Collector
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 from safety import Checker
-VERSION='meme-v0.5'
+VERSION='meme-v0.5.1'
 
 def safety_text(p):
     labels = {'safe': '未检出已知硬风险（不保证可卖）', 'blocked': '已阻断',

@@ -7,7 +7,7 @@ from scoring import score
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 
-VERSION = 'stock-v0.5'
+VERSION = 'stock-v0.5.1'
 
 def market_group(row):
     explicit = row.get('market_group')
@@ -54,16 +54,16 @@ def cycle(cfg, store, collector=None, universe=None):
     for row in rows:
         s = row['score_meta']; key = row['symbol']; old = previous.get(key); current[key] = {'score': s['score']}
         kind = 'new_hot' if s['score'] >= 70 and not old else 'surge' if old and s['score'] - old.get('score', 0) >= 15 else None
-        if kind and channels and row.get('fresh', False):
+        if kind and row.get('fresh', False):
             text = ('🚨 股票即时信号' if kind == 'new_hot' else '📈 股票评分跃升') + '\n' + fmt(row, s)
             track_key=f'{VERSION}:event:{kind}:{key}:{int(now//1800)}'
             for ch in channels: store.enqueue(f'{track_key}:{ch}', {'channel': ch, 'text': text}, now)
-            events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_group(row), 'payload': {'score': s, 'theme': row.get('theme'), 'risk': s.get('risk', [])}})
+            events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_label(row), 'payload': {'score': s, 'theme': row.get('theme'), 'kind': kind, 'quote_at': row.get('quote_at'), 'risk': s.get('risk', [])}})
     store.put('scores', current)
     with store.db() as d:
         for row in rows:
             if row.get('fresh') and isinstance(row.get('price'), (int,float)) and row['price']>0:
-                observe_forward(d,row['symbol'],row['price'],now)
+                observe_forward(d,row['symbol'],row['price'],row['quote_at'])
         for event in events:
             register_forward(d,event['track_key'],event['instrument_key'],event['symbol'],event['market'],event['entry'],event['payload'],now)
     for row in rows: store.put('row:' + row['symbol'], row)

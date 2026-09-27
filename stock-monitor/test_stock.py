@@ -108,4 +108,16 @@ class TestStock(unittest.TestCase):
             self.assertAlmostEqual(marks['6h']['peak_multiple'],1.2)
             self.assertEqual(forward_summary(d)['complete'],1)
 
+    def test_forward_signal_recorded_when_notifications_disabled(self):
+        from unittest.mock import Mock
+        row=parse_chart(self.chart(),{'symbol':'0981.HK','name':'HK','theme':'AI','region':'中国香港','market_subgroup':'港股'})
+        collector=Mock();collector.collect.return_value=([row],[])
+        with patch('radar.score',return_value={'score':90,'reasons':[],'risk':[]}):
+            report=cycle(self.cfg,self.store,collector,[])
+        self.assertEqual(len(report['events']),1)
+        with self.store.db() as db:
+            track=db.execute('SELECT * FROM forward_tracks').fetchone()
+            self.assertEqual(track['market'],'中国股票·港股')
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM outbox').fetchone()[0],0)
+
 if __name__ == '__main__': unittest.main()
