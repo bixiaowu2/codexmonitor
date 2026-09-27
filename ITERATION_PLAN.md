@@ -70,3 +70,8 @@
 验证：Meme 63项、股票20项、Alpha80项；部署前备份代码/配置/数据库，部署后核对运行版本、账本schema与降级统计，保留回滚路径。下一优先项是独立跟踪已经发出的资产，避免其退出发现源后丢失后续报价；不能用幸存的少数样本做盈利率结论。
 
 部署验收：meme-v0.5.1、stock-v0.5.1均完成真实循环，forward-v2 schema和分时缺失计数已验证；四服务active且NRestarts=0，Alpha/X未重启。Meme双渠道投递成功，股票休市未制造测试信号。备份为`/var/backups/meme-radar/forward-v2-20260927T030244Z`、`/var/backups/stock-radar/forward-v2-20260927T030254Z`。原始复盘明细保留在本地outputs/reviews，不提交数据库或日志。
+
+
+## GitHub 工程实践调研（2026-09-27）
+
+参考高星 Freqtrade、Hummingbot、CCXT 与 OpenBB：落地可复现时间窗口、纸面/实际仓隔离、来源和错误状态记录、限流退避。新增 Meme `Retry-After` 处理，不改评分或提醒阈值。GitHub 记录见 `GITHUB_RESEARCH.md`；部署前测试与备份完成，云端 63 项 Meme 测试通过、四服务 active 且 NRestarts=0，Alpha/X InvocationID 未改变。

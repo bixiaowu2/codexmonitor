@@ -13,7 +13,7 @@
 
 ## 已落地
 
-- Meme 网络层现在保存 HTTP `Retry-After`，并把下一次请求退避时间取为指数退避和上游建议值的较大者，最多 15 分钟。429/限流仍显示为数据质量问题。
+- Meme 网络层现在保存 HTTP `Retry-After`，并把下一次请求退避时间取为指数退避和上游建议值的较大者，最多 15 分钟。429/限流仍显示为数据质量问题。已部署到云端，meme-radar 63 项测试通过、NRestarts=0；备份保留在 `/var/backups/meme-radar/retry-after-20260927T063638Z`。
 - 新增测试覆盖 `Retry-After`，评分、蜜罐门槛和即时提醒规则不变。
 - `forward-v2` 已要求严格时间窗口、明确 missing、保留超时原始值，避免未来价格回填早期收益。
 - 股票市场分组、Alpha 的 signal/control 账本和三套独立投递队列继续保留。
