@@ -9,7 +9,7 @@
 | [meme-monitor](meme-monitor/) | 六链 Meme 雷达 | BSC、Solana、Robinhood、X Layer、Arc、Stable 池监控和定期排名 |
 | [stock-monitor](stock-monitor/) | 股票监控 | A股、港股、美股及其他市场的产业链机会研究与前瞻账本 |
 
-三个现有程序在云服务器上分别由独立 systemd 服务管理，配置和状态目录互相隔离。仓库内的 `.env.example` 仅是模板；部署时在服务器创建实际 `.env` 或 `/etc/*-radar.env`。
+四个现有程序在云服务器上分别由独立 systemd 服务管理，配置和状态目录互相隔离。仓库内的 `.env.example` 仅是模板；部署时在服务器创建实际 `.env` 或 `/etc/*-radar.env`。
 
 ## 本地测试
 

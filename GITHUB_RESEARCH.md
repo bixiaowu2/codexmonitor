@@ -9,14 +9,14 @@
 | [Freqtrade](https://github.com/freqtrade/freqtrade) | 约 5.5 万 | GPL-3.0 | 回测包含费用；显式时间区间；动态名单会破坏历史可复现性；拆分入场标签、退出原因和统计显著性 | 保留时间切分；前瞻账本增加缺失端点审计；不把峰值倍数当收益率 |
 | [Hummingbot](https://github.com/hummingbot/hummingbot) | 约 2.0 万 | Apache-2.0 | 纸面交易与实盘分离；连接器统一接口；订单生命周期和三重障碍风险控制 | 当前系统继续只读；把通知、研究参考仓、实际成本登记仓分开 |
 | [CCXT](https://github.com/ccxt/ccxt) | 约 4.4 万 | MIT | 统一数据接口、速率限制、可分类错误、网络错误与限流错误分别重试 | Meme 数据源读取 `Retry-After`，按服务端建议退避；不把429当成空数据 |
-| [OpenBB](https://github.com/OpenBB-finance/OpenBB) | 约 7.3 万 | 需按引入内容审查 | Provider 抽象、来源可追溯、同一数据供多个研究面使用 | 三套雷达继续记录 provider、时间戳、覆盖和错误；不把来源存在等同于数据正确 |
+| [OpenBB](https://github.com/OpenBB-finance/OpenBB) | 约 7.3 万 | 需按引入内容审查 | Provider 抽象、来源可追溯、同一数据供多个研究面使用 | 四套雷达继续记录 provider、时间戳、覆盖和错误；不把来源存在等同于数据正确 |
 
 ## 已落地
 
 - Meme 网络层现在保存 HTTP `Retry-After`，并把下一次请求退避时间取为指数退避和上游建议值的较大者，最多 15 分钟。429/限流仍显示为数据质量问题。已部署到云端，meme-radar 63 项测试通过、NRestarts=0；备份保留在 `/var/backups/meme-radar/retry-after-20260927T063638Z`。
 - 新增测试覆盖 `Retry-After`，评分、蜜罐门槛和即时提醒规则不变。
 - `forward-v2` 已要求严格时间窗口、明确 missing、保留超时原始值，避免未来价格回填早期收益。
-- 股票市场分组、Alpha 的 signal/control 账本和三套独立投递队列继续保留。
+- 股票市场分组、Alpha 的 signal/control 账本和四套独立投递队列继续保留。
 
 ## 暂不照搬
 
