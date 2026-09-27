@@ -502,10 +502,10 @@ def health_check(state_path: Path, accounts: list[str]) -> int:
 
 def scrape_error_category(error: str | None) -> str:
     text=(error or '').lower()
-    if 'http 401' in text or 'http 403' in text or 'login' in text or 'access' in text:
-        return '访问/登录限制'
     if 'no tweet cards' in text or 'selector' in text or 'parseable tweets' in text:
         return '页面结构或内容为空'
+    if 'http 401' in text or 'http 403' in text or 'login' in text or 'access' in text:
+        return '访问/登录限制'
     if 'timeout' in text or 'network' in text or 'http 5' in text:
         return '网络或超时'
     return '其他抓取异常'
