@@ -526,10 +526,11 @@ def record_scrape_health(state: dict[str, Any], account: str, success: bool,
         entry["failures"] += 1
         entry['last_error']=(error or 'unknown')[:180]
         entry['error_category']=scrape_error_category(error)
-    needs_alert = entry["failures"] >= 3 and time.time() - entry["last_alert"] >= 1800
+    # Persist one notice per outage across restarts; a successful scrape rearms it.
+    needs_alert = entry["failures"] >= 3 and not entry["alerted"]
     if recovery or needs_alert:
         message = ("监控恢复：已重新读取该账号页面。" if recovery else
-                   f'监控异常：连续三次无法读取该账号页面；分类：{entry.get("error_category","其他抓取异常")}。请检查 X 登录状态、网络和访问限制。当前不能保证五分钟内推送。')
+                   f'监控异常：连续三次无法读取该账号页面；分类：{entry.get("error_category","其他抓取异常")}。后台继续重试，同一故障不再重复提醒，恢复后通知。无法据此判断账号是否限制可见；故障期间可能漏帖。')
         notice = Tweet(account, "health", f"https://x.com/{account}", message, datetime.now(timezone.utc).isoformat(), "监控状态")
         try:
             notify(notice, routes)

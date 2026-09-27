@@ -202,7 +202,7 @@ class TelegramTests(unittest.TestCase):
             targets = m.global_targets()
             self.assertEqual(targets[0].chat_id, '-1001')
 
-    def test_health_alert_cooldown_recovery_and_stale_check(self):
+    def test_health_alert_once_per_outage_across_restart_and_recovery(self):
         with tempfile.TemporaryDirectory() as d, patch.object(m, 'notify') as notify:
             path = Path(d)/'state.json'
             state = m.load_state(path)
@@ -215,8 +215,19 @@ class TelegramTests(unittest.TestCase):
             self.assertEqual(notify.call_args.args[0].kind, '监控状态')
             m.record_scrape_health(state, 'a', False, {}, path)
             self.assertEqual(notify.call_count, 1)
+            # The old half-hour timer must not re-notify, even after a restart.
+            state = m.load_state(path)
+            with patch.object(m.time, 'time', return_value=state['health']['heartbeat'] + 86400):
+                for _ in range(4):
+                    m.record_scrape_health(state, 'a', False, {}, path)
+            self.assertEqual(notify.call_count, 1)
             m.record_scrape_health(state, 'a', True, {}, path)
             self.assertEqual(notify.call_count, 2)
+            m.record_scrape_health(state, 'a', True, {}, path)
+            self.assertEqual(notify.call_count, 2)
+            for _ in range(3):
+                m.record_scrape_health(state, 'a', False, {}, path)
+            self.assertEqual(notify.call_count, 3)
             state['health']['accounts']['a']['last_success'] = 0
             m.save_state(path, state)
             self.assertEqual(m.health_check(path, ['a']), 1)
