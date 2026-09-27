@@ -37,7 +37,7 @@ def main():
         try:
             signal.alarm(240)
             report=cycle(cfg,store,collector)
-            health={'status':'ok' if not report['errors'] else 'partial' if report['pairs_seen'] else 'failed','as_of':time.time(),'version':VERSION,'pairs_seen':report['pairs_seen'],'candidates':report['candidates'],'chains':report['chains'],'errors':report['errors'],'elapsed':round(time.time()-started,1)}
+            health={'status':'ok' if not report['errors'] else 'partial' if report['pairs_seen'] else 'failed','as_of':time.time(),'version':VERSION,'pairs_seen':report['pairs_seen'],'candidates':report['candidates'],'chains':report['chains'],'safety':report['safety'],'errors':report['errors'],'elapsed':round(time.time()-started,1)}
             store.put('health',health)
             for _ in range(4):
                 if not deliver_one(cfg,store):break

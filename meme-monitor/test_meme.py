@@ -15,7 +15,7 @@ from notify import send_channel
 class TestMeme(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-  self.cfg=Config.load({'MEME_DATA':self.tmp.name});self.store=Store(self.tmp.name)
+  self.cfg=Config.load({'MEME_DATA':self.tmp.name,'MEME_SAFETY_ENABLED':'false'});self.store=Store(self.tmp.name)
  def pool(self,**kw):
   p=normalize_pair({'baseToken':{'address':'0xAB','symbol':'TEST'},'pairAddress':'0xCD','pairCreatedAt':time.time()-60,'priceUsd':'1','liquidity':{'usd':50000},'volume':{'h1':50000},'txns':{'h1':{'buys':80,'sells':20}},'priceChange':{'h1':10}},'bsc','test');p.update(kw);return p
  def test_profile_budget_after_chain_filter(self):
@@ -69,7 +69,7 @@ class TestMeme(unittest.TestCase):
   from dataclasses import replace
   cfg=replace(self.cfg,telegram_enabled=True,dingtalk_enabled=False,telegram_token='1:x',telegram_chat='1')
   c=Collector(spacing=0);p=self.pool(liquidity_usd=100000,volume_1h=250000,change_1h=30)
-  with patch.object(c,'collect',return_value=([p],[])):
+  with patch.object(c,'collect',return_value=([p],[])), patch('radar.Checker.check',return_value={'status':'safe','eligible':True}):
    first=cycle(cfg,self.store,c);second=cycle(cfg,self.store,c)
   self.assertEqual(first['events'][0]['kind'],'new_hot')
   self.assertEqual(second['events'],[])
@@ -110,7 +110,7 @@ class TestMeme(unittest.TestCase):
  def test_forward_ledger_works_when_notifications_disabled(self):
   c=Collector(spacing=0)
   p=self.pool(liquidity_usd=100000,volume_1h=250000,change_1h=30)
-  with patch.object(c,'collect',return_value=([p],[])):
+  with patch.object(c,'collect',return_value=([p],[])), patch('radar.Checker.check',return_value={'status':'safe','eligible':True}):
    report=cycle(self.cfg,self.store,c)
   self.assertEqual(report['events'][0]['kind'],'new_hot')
   self.assertEqual(report['forward']['tracks'],1)
