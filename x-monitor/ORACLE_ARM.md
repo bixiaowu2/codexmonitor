@@ -4,7 +4,7 @@
 
 目标环境：Ubuntu 24.04.4 LTS，6.17.0-1011-oracle，aarch64。
 
-预设监控账号：`binancezh`、`cz_binance`、`heyibinance`；CZ 账号已按用户更正为 `cz_binance`。运行方式为普通 Chromium + Xvfb。默认同时推送 Telegram 和钉钉，企业微信可不配置。
+预设监控账号：`binancezh`、`cz_binance`、`heyibinance`；X 上可访问的 CZ 账号是 `cz_binance`（`czbinance` 返回 404）。额外账号清单默认关闭。运行方式为普通 Chromium + Xvfb。默认同时推送 Telegram 和钉钉，企业微信可不配置。
 
 ## 推荐：原生 Python + systemd
 

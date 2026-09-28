@@ -89,7 +89,7 @@ python -m unittest discover -s tests -v
 
 ## 新增 KOL / 生态账户与 Meme 共享出口
 
-新增账户统一维护在 `x_accounts.json`。20个初始条目包含9个新增研究、风险调查和官方生态账户，以及原有3个Binance账户，并补充跨链链上数据和高影响力观点账户。账户身份参考公开来源，尚未以喊单收益回测验证；官方账号与风险调查账号不等于推荐买入。
+新增账户统一维护在 `x_accounts.json`。该文件只在 `X_EXTRA_ACCOUNTS_FILE` 指向它时启用；留空即可只监控 `X_ACCOUNTS` 中的核心账号。账户身份参考公开来源，尚未以喊单收益回测验证；官方账号与风险调查账号不等于推荐买入。
 
 配置 `X_EXTRA_ACCOUNTS_FILE=./x_accounts.json` 后，程序每轮重新读取清单；新增账户的帖子通过原有Telegram/钉钉配置和持久化队列投递，逐渠道确认、失败重试。`routes.json` 如有单独账户规则则优先使用该规则。首次成功读取只建立基线，不补发历史帖。原账户仍由 `X_ACCOUNTS` 优先轮询，同名条目不重复采集。
 
