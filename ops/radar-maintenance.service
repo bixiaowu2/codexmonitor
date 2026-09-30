@@ -1,0 +1,23 @@
+[Unit]
+Description=Radar storage maintenance and compact review evidence
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/radar-maintenance/radar_maintenance.py --apply
+ExecStartPost=/usr/sbin/logrotate --state /var/lib/radar-maintenance/logrotate.state /etc/radar-maintenance.logrotate
+StateDirectory=radar-maintenance
+StateDirectoryMode=0700
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=256M
+CPUQuota=25%
+TimeoutStartSec=15min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/radar-maintenance /var/lib/alpha-radar
+StandardOutput=null
+StandardError=journal

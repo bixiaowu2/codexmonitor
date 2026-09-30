@@ -68,10 +68,12 @@ class CloudTests(unittest.TestCase):
         with self.store.db() as db:
             db.execute("INSERT INTO scans VALUES('2000-01-01','{}')")
             db.execute("INSERT INTO scans VALUES('2000-01-02','{}')")
+            db.execute("INSERT INTO events(as_of,asset,event,payload) VALUES('2000-01-01','x','old','{}')")
         self.store.enqueue('pending',{'kind':'ops','text':'pending'},now=0)
         self.store.prune(30)
         with self.store.db() as db:self.assertEqual(db.execute('SELECT count(*) FROM scans').fetchone()[0],1)
         self.assertEqual(self.rows()[0]['state'],'pending')
+        with self.store.db() as db:self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0],1)
     def test_plaintext_size_unicode_safe(self):
         self.store.enqueue('long',{'kind':'ops','text':'😀'*5000})
         msg=cloud.message(self.rows()[0]);self.assertLess(len(msg.encode('utf-16-le'))//2,4096)

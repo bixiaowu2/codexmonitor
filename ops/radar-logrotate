@@ -1,0 +1,12 @@
+/var/lib/alpha-radar/scan.log /var/lib/alpha-radar/fast.log {
+    daily
+    maxsize 20M
+    rotate 7
+    maxage 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su alpha-radar alpha-radar
+}

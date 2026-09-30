@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly radar disk check and daily backup/report
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+Unit=radar-maintenance.service
+
+[Install]
+WantedBy=timers.target

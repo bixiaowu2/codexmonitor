@@ -141,14 +141,14 @@ class Store:
         iso=datetime.fromtimestamp(cutoff,timezone.utc).isoformat(timespec='seconds')
         with self.db() as db:
             db.execute('DELETE FROM scans WHERE as_of<? AND as_of<>(SELECT MAX(as_of) FROM scans)',(iso,))
-            db.execute('DELETE FROM events WHERE as_of<?',(iso,))
+            # Signals are long-term research evidence; only raw scans roll off.
             db.execute("DELETE FROM outbox WHERE created<? AND state<>'pending'",(cutoff,))
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='dingtalk_outbox'").fetchone():db.execute("DELETE FROM dingtalk_outbox WHERE created<? AND state<>'pending'",(cutoff,))
         # Only rolling live raw files, never the packaged historical research.
         raw=self.folder/'raw'
-        if raw.exists():
+        if raw.exists() and not raw.is_symlink():
             for f in raw.glob('*.json'):
-                if f.stat().st_mtime<cutoff:f.unlink()
+                if not f.is_symlink() and f.is_file() and f.stat().st_mtime<cutoff:f.unlink()
 
 def number(value):
     return '未知' if value is None else f'{value:,.4g}'
