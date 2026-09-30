@@ -15,8 +15,9 @@ Telegram：使用官方 @BotFather 创建机器人，将机器人加入目标群
 在服务器项目目录只在首次部署创建 `.env`，配置以下字段：
 
 ```env
-X_ACCOUNTS='binancezh,cz_binance,heyibinance'
+X_ACCOUNTS='binancezh,cz_binance,heyibinance,binancewallet'
 POLL_SECONDS=120
+WATCHDOG_SECONDS=900
 HEADLESS=false
 TELEGRAM_BOT_TOKEN='填写BotFather提供的Token'
 TELEGRAM_CHAT_ID='填写目标群或频道ID'

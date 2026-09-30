@@ -17,7 +17,9 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +38,33 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("x-monitor")
 STOP = False
+
+
+def watchdog_expired(last_progress: float, now: float, timeout_seconds: float) -> bool:
+    return now - last_progress > timeout_seconds
+
+
+def start_progress_watchdog(timeout_seconds: float) -> tuple[Callable[[], None], Callable[[], None]]:
+    """Exit a wedged browser process so systemd can restart the monitor."""
+    stopped = threading.Event()
+    lock = threading.Lock()
+    last_progress = time.monotonic()
+
+    def beat() -> None:
+        nonlocal last_progress
+        with lock:
+            last_progress = time.monotonic()
+
+    def watch() -> None:
+        while not stopped.wait(30):
+            with lock:
+                stalled = watchdog_expired(last_progress, time.monotonic(), timeout_seconds)
+            if stalled:
+                LOG.error("watchdog: no monitor progress for %.0fs; exiting for supervisor restart", timeout_seconds)
+                os._exit(1)
+
+    threading.Thread(target=watch, name="monitor-watchdog", daemon=True).start()
+    return beat, stopped.set
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -550,6 +579,7 @@ def run() -> int:
     routes_path = Path(required_env("ROUTES_FILE", "./routes.json")).expanduser()
     headless = env_bool("HEADLESS", False)
     max_items = max(1, int(required_env("MAX_ITEMS_PER_ACCOUNT", "20")))
+    watchdog_seconds = max(300, int(required_env("WATCHDOG_SECONDS", "900")))
     if args.login:
         return login_browser(profile_dir)
     if args.health:
@@ -592,9 +622,11 @@ def run() -> int:
         )
         page = browser.pages[0] if browser.pages else browser.new_page()
         LOG.info("monitor started for %s; interval=%ss; profile=%s", ", ".join(accounts), poll_seconds, profile_dir)
+        beat, stop_watchdog = start_progress_watchdog(watchdog_seconds)
         try:
             while not STOP:
                 cycle_start = time.monotonic()
+                beat()
                 if registry_path:
                     try:
                         registry = load_accounts(registry_path)
@@ -605,6 +637,7 @@ def run() -> int:
                 for account in accounts:
                     if STOP:
                         break
+                    beat()
                     try:
                         tweets = scrape_account(page, account, max_items=max_items)
                         ingest(state, account, tweets, routes, state_path)
@@ -612,6 +645,7 @@ def run() -> int:
                             try: feed.success(account,tweets,registry[account]['interval_seconds'])
                             except Exception as exc: LOG.error('public export failed: %s',type(exc).__name__)
                         record_scrape_health(state, account, True, routes, state_path)
+                        beat()
                     except Exception as exc:
                         cycle_ok = False
                         LOG.error("check failed for @%s: %s", account, exc)
@@ -637,6 +671,7 @@ def run() -> int:
                         deliver_pending(state,routes,state_path)
                 if args.once:
                     return 0 if cycle_ok and not state["pending"] else 1
+                beat()
                 elapsed = time.monotonic() - cycle_start
                 if elapsed > poll_seconds:
                     LOG.warning("cycle took %.1fs, exceeding polling interval %ss", elapsed, poll_seconds)
@@ -645,6 +680,7 @@ def run() -> int:
                     deliver_pending(state, routes, state_path)
                     time.sleep(min(1, max(0, deadline - time.monotonic())))
         finally:
+            stop_watchdog()
             browser.close()
     LOG.info("monitor stopped")
     return 0

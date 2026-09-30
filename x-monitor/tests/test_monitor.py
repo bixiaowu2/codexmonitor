@@ -68,6 +68,10 @@ class StateTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 m.notify(tweet('a', 1), {})
 
+    def test_watchdog_expiry_uses_progress_timestamp(self):
+        self.assertFalse(m.watchdog_expired(100, 899, 800))
+        self.assertTrue(m.watchdog_expired(100, 901, 800))
+
     def test_old_state_migration(self):
         self.path.write_text(json.dumps({'seen': {'a': {'10': 't'}, 'b': {}}, 'initialized': True}))
         state = m.load_state(self.path)
