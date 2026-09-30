@@ -110,7 +110,16 @@ class Store:
         with self.db() as db:row=db.execute('SELECT value FROM runtime WHERE key=?',(key,)).fetchone()
         return json.loads(row[0]) if row else default
     def put(self,key,value):
-        with self.db() as db:db.execute('INSERT OR REPLACE INTO runtime VALUES(?,?)',(key,json.dumps(value)))
+        self.write('INSERT OR REPLACE INTO runtime VALUES(?,?)',(key,json.dumps(value)))
+    def write(self,sql,params=()):
+        # A scan may hold SQLite's single writer slot while a delivery needs an ACK.
+        for attempt in range(4):
+            try:
+                with self.db() as db:db.execute(sql,params)
+                return
+            except sqlite3.OperationalError as exc:
+                if 'database is locked' not in str(exc).lower() or attempt==3:raise
+                time.sleep(1)
     def scan_status(self,status,now=None,namespace='scan'):
         now=time.time() if now is None else now
         old=self.state(namespace,{'failures':0,'incident':None,'last_good':None})
@@ -196,15 +205,15 @@ def deliver_one(store,config,send=telegram_send,now=None):
     if not config.enabled or not row:return False
     payload=json.loads(row['payload'])
     if not config.notify_new and payload.get('event')=='新发现交集（不等于刚上市）':
-        with store.db() as db:db.execute("UPDATE outbox SET state='skipped' WHERE id=?",(row['id'],))
+        store.write("UPDATE outbox SET state='skipped' WHERE id=?",(row['id'],))
         return True
     try:send(config,message(row))
     except SendError as e:
         delay=max(e.retry,min(3600,30*2**min(row['attempts'],7)))
-        with store.db() as db:db.execute('UPDATE outbox SET attempts=attempts+1,next_try=?,error=? WHERE id=?',(now+delay,str(e),row['id']))
+        store.write('UPDATE outbox SET attempts=attempts+1,next_try=?,error=? WHERE id=?',(now+delay,str(e),row['id']))
         store.put('telegram',{'checked':now,'status':'retry','error':str(e)})
     else:
-        with store.db() as db:db.execute("UPDATE outbox SET state='sent',sent=?,attempts=attempts+1,error=NULL WHERE id=?",(now,row['id']))
+        store.write("UPDATE outbox SET state='sent',sent=?,attempts=attempts+1,error=NULL WHERE id=?",(now,row['id']))
         store.put('telegram',{'checked':now,'status':'ok'})
     return True
 
@@ -253,16 +262,22 @@ def run(config):
         except BlockingIOError:raise RuntimeError('Another cloud monitor uses this data directory') from None
         def worker():
             from telegram_commands import poll
-            next_poll=0;next_reminder=0
+            next_poll=0;next_reminder=0;last_busy_log=0
             while not stop.is_set():
                 notification_beat[0]=time.monotonic()
-                if time.monotonic()>=next_reminder:
-                    reminders(store);next_reminder=time.monotonic()+15
-                deliver_one(store,config)
-                dingtalk.deliver_one(store,config)
-                if time.monotonic()>=next_poll:
-                    poll(store,config)
-                    next_poll=time.monotonic()+10
+                try:
+                    if time.monotonic()>=next_reminder:
+                        reminders(store);next_reminder=time.monotonic()+15
+                    deliver_one(store,config)
+                    dingtalk.deliver_one(store,config)
+                    if time.monotonic()>=next_poll:
+                        poll(store,config)
+                        next_poll=time.monotonic()+10
+                except sqlite3.OperationalError as exc:
+                    if 'database is locked' not in str(exc).lower():raise
+                    if time.monotonic()-last_busy_log>=60:
+                        print('notification_db_busy: retrying after scan write',flush=True)
+                        last_busy_log=time.monotonic()
                 notification_beat[0]=time.monotonic()
                 stop.wait(1)
         def watchdog():
@@ -277,12 +292,12 @@ def run(config):
             while not stop.is_set():
                 now=time.time();beat[0]=time.monotonic()
                 if not notifier.is_alive():raise RuntimeError('Notification worker stopped')
-                if not fast_running and now>=fast_due:fast_scan.start();fast_running=True
+                if not running and not fast_running and now>=fast_due:fast_scan.start();fast_running=True
                 if fast_running:
                     fast_status=fast_scan.poll()
                     if fast_status is not None:
                         store.scan_status(fast_status,namespace='fast');fast_running=False;fast_due=max(now+5,fast_scan.started+config.fast_interval)
-                if not running and now>=due:scan.start();running=True
+                if not running and not fast_running and now>=due:scan.start();running=True
                 if running:
                     status=scan.poll()
                     if status is not None:

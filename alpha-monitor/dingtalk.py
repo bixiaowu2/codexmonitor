@@ -55,14 +55,14 @@ def deliver_one(store,config,send_fn=send,now=None):
     if not config.ding_enabled or not row:return False
     payload=json.loads(row['payload'])
     if not config.notify_new and payload.get('event')=='新发现交集（不等于刚上市）':
-        with store.db() as db:db.execute("UPDATE dingtalk_outbox SET state='skipped' WHERE id=?",(row['id'],))
+        store.write("UPDATE dingtalk_outbox SET state='skipped' WHERE id=?",(row['id'],))
         return True
     try:send_fn(config,message(row))
     except DingError as e:
         delay=min(3600,60*2**min(row['attempts'],6))
-        with store.db() as db:db.execute('UPDATE dingtalk_outbox SET attempts=attempts+1,next_try=?,error=? WHERE id=?',(now+delay,str(e),row['id']))
+        store.write('UPDATE dingtalk_outbox SET attempts=attempts+1,next_try=?,error=? WHERE id=?',(now+delay,str(e),row['id']))
         store.put('dingtalk',{'status':'retry','checked':now,'error':str(e)})
     else:
-        with store.db() as db:db.execute("UPDATE dingtalk_outbox SET state='sent',sent=?,attempts=attempts+1,error=NULL WHERE id=?",(now,row['id']))
+        store.write("UPDATE dingtalk_outbox SET state='sent',sent=?,attempts=attempts+1,error=NULL WHERE id=?",(now,row['id']))
         store.put('dingtalk',{'status':'ok','checked':now})
     return True

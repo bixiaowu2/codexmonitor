@@ -44,6 +44,16 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(len(calls),1);self.assertEqual(self.rows()[0]['state'],'sent')
         cloud.deliver_one(self.store,self.config,send=lambda c,t:calls.append(t),now=now+122)
         self.assertEqual(len(calls),1)
+    def test_runtime_write_retries_transient_sqlite_lock(self):
+        original=self.store.db;calls=[]
+        def db():
+            calls.append(1)
+            if len(calls)==1:raise sqlite3.OperationalError('database is locked')
+            return original()
+        with patch.object(self.store,'db',side_effect=db),patch('cloud.time.sleep'):
+            self.store.put('lock-retry',{'status':'ok'})
+        self.assertEqual(len(calls),2)
+        self.assertEqual(self.store.state('lock-retry'),{'status':'ok'})
     def test_expired_signal_never_sent(self):
         self.store.enqueue('old',{'kind':'ops','text':'old'},now=0)
         cloud.deliver_one(self.store,self.config,send=lambda *_:self.fail('expired sent'),now=self.config.ttl+1)
