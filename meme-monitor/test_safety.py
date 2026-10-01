@@ -6,7 +6,7 @@ from dataclasses import replace
 from unittest.mock import patch
 from config import Config
 from net import FetchError
-from radar import cycle, enqueue_events, safety_text
+from radar import cycle, enqueue_events, safety_text, event_text, event_reasons, safety_coverage
 from safety import Checker, assess, top10, EVM_CHAIN_IDS
 from scoring import score
 from sources import Collector
@@ -221,7 +221,7 @@ class TestSafety(unittest.TestCase):
         p=pair(safety_status='unknown',safety_eligible=False,safety_checked_at=time.time(),safety_warnings=['接口失败'])
         p['score_meta']={'score':100}
         old={'bsc:'+ADDRESS:{'score':1,'safety_eligible':True}}
-        self.assertEqual(enqueue_events(self.cfg,self.store,[p],old,time.time())[0]['kind'],'risk')
+        self.assertEqual(enqueue_events(self.cfg,self.store,[p],old,time.time())[0]['kind'],'data_gap')
         self.assertIn('GoPlus',safety_text(p))
         self.assertIn('仅观察',safety_text(p))
 
@@ -234,6 +234,78 @@ class TestSafety(unittest.TestCase):
         self.assertEqual(report['safety']['requests'],1)
         self.assertEqual(report['safety']['safe'],2)
         self.assertEqual(get.call_count,1)
+
+    def test_provider_missing_fields_are_not_network_failure_or_safe(self):
+        data=evm();data.pop('buy_tax');data.pop('sell_tax');data.pop('cannot_sell_all');data.pop('holders')
+        result=assess('arc',data)
+        self.assertEqual(result['status'],'unknown')
+        self.assertEqual(result['coverage_status'],'partial_fields')
+        self.assertEqual(set(result['coverage_missing']),{'buy_tax','sell_tax','cannot_sell_all','holders'})
+        self.assertFalse(result['eligible'])
+        self.assertNotIn('api_error',result)
+        p=pair(chain='arc',safety_status='unknown',safety_coverage_missing=result['coverage_missing'],safety_coverage_status=result['coverage_status'])
+        self.assertIn('买入税',safety_text(p));self.assertIn('不等于已确认不能卖出',safety_text(p))
+        self.assertEqual(safety_coverage([p])['arc']['partial_fields'],1)
+
+    def test_liquidity_warning_requires_same_pool_and_valid_reserves(self):
+        old={'liquidity_usd':15070,'pair_address':'pool','source':'geckoterminal','safety_status':'unknown'}
+        p=pair(pair_address='pool',source='geckoterminal',liquidity_usd=7219,safety_status='unknown')
+        reasons=event_reasons(p,old)
+        self.assertEqual(len(reasons),1);self.assertIn('下降 52.1%',reasons[0])
+        p['score_meta']={'score':34.4}
+        text=event_text(p,p['score_meta'],'risk',old)
+        self.assertIn('15,070.00 → 7,219.00',text)
+        self.assertNotIn('安全状态或流动性恶化',text)
+        for change in ({'pair_address':'different'},{'source':'dexscreener'},{'liquidity_usd':None},{'liquidity_usd':float('nan')}):
+            self.assertEqual(event_reasons(dict(p,**change),old),[])
+
+    def test_data_gap_is_not_profit_signal_and_does_not_repeat_while_unknown(self):
+        cfg=replace(self.cfg,telegram_enabled=True,telegram_token='1:x',telegram_chat='1')
+        self.run_cycle([pair()],evm(),cfg)
+        self.store.put('safety_cache',{})
+        with patch('safety.get_json',side_effect=FetchError('timeout')):
+            second=self.run_cycle([pair()],cfg=cfg)
+            third=self.run_cycle([pair()],cfg=cfg)
+        self.assertEqual([e['kind'] for e in second['events']],['data_gap'])
+        self.assertEqual(third['events'],[])
+        with self.store.db() as d:
+            self.assertEqual(d.execute('SELECT count(*) FROM forward_tracks').fetchone()[0],1)
+            pending=[r[0] for r in d.execute("SELECT payload FROM outbox WHERE state='pending'")]
+            self.assertTrue(any('Meme安全数据缺口' in body for body in pending))
+
+    def test_missing_holders_alone_is_data_gap_not_new_contract_risk(self):
+        p=pair(safety_status='safe',safety_eligible=False,safety_warnings=['持仓集中度数据缺失或无效'])
+        p['score_meta']={'score':20}
+        old={'bsc:'+ADDRESS:{'score':80,'safety_eligible':True,'safety_status':'safe'}}
+        self.assertEqual(enqueue_events(self.cfg,self.store,[p],old,time.time())[0]['kind'],'data_gap')
+
+    def test_missing_token_result_does_not_block_other_tokens(self):
+        other='0x'+'b'*40;checker=Checker(True)
+        with patch('safety.get_json',side_effect=[{'code':1,'result':{}},response(evm(),other)]) as get:
+            first=checker.check(pair())
+            second=checker.check(pair(other))
+        self.assertEqual(first['api_error'],'missing_result')
+        self.assertEqual(second['status'],'safe');self.assertEqual(get.call_count,2)
+        self.assertEqual(checker.backoff_until,0)
+
+    def test_actual_rate_limit_honors_retry_after_and_records_reason(self):
+        checker=Checker(True)
+        with patch('safety.get_json',side_effect=FetchError('http_429',180)):
+            before=time.time();checker.check(pair())
+        self.assertGreaterEqual(checker.backoff_until,before+180)
+        restored=Checker(True,cache=checker.snapshot())
+        with patch('safety.get_json') as get:
+            result=restored.check(pair('0x'+'b'*40))
+            get.assert_not_called()
+        self.assertIn('HTTP 429',result['warnings'][0]);self.assertIn('后重试',result['warnings'][0])
+        self.assertEqual(result['api_error'],'http_429')
+
+    def test_timeout_backoff_is_not_labelled_rate_limit(self):
+        checker=Checker(True)
+        with patch('safety.get_json',side_effect=FetchError('TimeoutError')):
+            checker.check(pair())
+        result=checker.check(pair('0x'+'b'*40))
+        self.assertIn('TimeoutError',result['warnings'][0]);self.assertNotIn('限流',result['warnings'][0])
 
 
 if __name__=='__main__': unittest.main()

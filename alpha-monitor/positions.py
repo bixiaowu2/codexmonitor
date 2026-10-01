@@ -14,6 +14,9 @@ def initialize(db):
       alpha_id TEXT NOT NULL,entry REAL NOT NULL,created REAL NOT NULL,stop_pct REAL NOT NULL,
       trail_pct REAL NOT NULL,peak REAL NOT NULL,liquidity_base REAL,closed REAL,last_price REAL,last_checked REAL);
     CREATE TABLE IF NOT EXISTS position_alerts(position_id INTEGER,kind TEXT,created REAL,PRIMARY KEY(position_id,kind));
+    CREATE TABLE IF NOT EXISTS position_quote_health(
+      position_id INTEGER PRIMARY KEY,failed_since REAL,last_failure REAL,alert_id INTEGER,
+      reason TEXT,last_quote_time REAL,source TEXT);
     CREATE TABLE IF NOT EXISTS strategy_state(address TEXT PRIMARY KEY,payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS strategy_events(key TEXT PRIMARY KEY,created REAL,payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS paper_tracks(
@@ -33,6 +36,18 @@ def open_positions(db):return list(db.execute('SELECT * FROM positions WHERE clo
 
 def position_tick(db,p,quote,liquidity,now):
     from alerts import raise_alert,resolve
+    from quotes import valid
+    if not valid(quote,now):return
+    health=db.execute('SELECT * FROM position_quote_health WHERE position_id=?',(p['id'],)).fetchone()
+    if health and health['last_quote_time'] is not None and quote['time']<health['last_quote_time']:return
+    previous=db.execute("SELECT id FROM important_alerts WHERE base=? AND state IN ('open','acknowledged','expired') ORDER BY id DESC LIMIT 1",(f'position-missing:{p["id"]}',)).fetchone()
+    if previous:
+        label='参考仓（假定买入）' if p['mode']=='reference' else '实际成本登记仓'
+        emit(db,f'position-quote-recovered:{previous[0]}',
+             f'✅ {label} #{p["id"]} {p["symbol"]} 报价监测恢复\n来源 {quote.get("source","alpha_ticker")}；参考报价 {quote["price"]:.8g} USDT\n报价时间/保守下界 UTC {datetime.fromtimestamp(quote["time"]/1000,timezone.utc).isoformat()}\n未执行交易。',now)
+        db.execute("UPDATE important_alerts SET state='resolved' WHERE base=? AND state IN ('open','acknowledged','expired')",(f'position-missing:{p["id"]}',))
+    db.execute('INSERT OR REPLACE INTO position_quote_health VALUES(?,NULL,NULL,NULL,NULL,?,?)',
+               (p['id'],quote['time'],quote.get('source','alpha_ticker')))
     price=quote['price'];peak=max(p['peak'],price);pnl=price/p['entry']-1
     label='信号参考仓（假定买入，未核实成交）' if p['mode']=='reference' else '实际成本登记仓（用户录入）'
     triggered=[]
@@ -49,7 +64,7 @@ def position_tick(db,p,quote,liquidity,now):
                  f'🔔 {label} #{p["id"]} · {p["symbol"]}\n{reason}\n'
                  f'登记成本 {p["entry"]:.8g}；报价 {price:.8g} USDT\n价格变化 {pnl:+.1%}（未扣费用/滑点）\n'
                  f'固定止损线 {p["entry"]*(1-p["stop_pct"]):.8g}；登记后已观察最高报价 {peak:.8g}\n'
-                 f'地址 {p["address"]}\n报价 UTC {datetime.fromtimestamp(quote["time"]/1000,timezone.utc).isoformat()}\n'
+                 f'地址 {p["address"]}\n报价来源 {quote.get("source","alpha_ticker")}；时间/保守下界 UTC {datetime.fromtimestamp(quote["time"]/1000,timezone.utc).isoformat()}\n'
                  '这是规则提醒，不保证能按该价格卖出；未执行交易。停止跟踪用 /close 编号。')
             if kind in ('stop','trail','liquidity'):raise_alert(db,f'position:{p["id"]}:{kind}',text,now,p['id'])
             else:emit(db,f'position:{p["id"]}:{kind}',text,now)
@@ -63,11 +78,31 @@ def position_tick(db,p,quote,liquidity,now):
     resolve(db,f'position-missing:{p["id"]}',now)
     db.execute('UPDATE positions SET peak=?,last_price=?,last_checked=? WHERE id=?',(peak,price,now,p['id']))
 
-def missing_position(db,p,now):
-    # One warning per position/day; missing data must not turn into a fabricated sell price.
+def missing_position(db,p,now,diagnostic=None):
+    # One incident until recovery, including after /ack or reminder expiration.
+    # A slow hourly scan must not invalidate a newer observation from the fast lane.
+    from quotes import MAX_AGE_MS
     from alerts import raise_alert
-    raise_alert(db,f'position-missing:{p["id"]}',
-         f'⚠️ 持仓 #{p["id"]} {p["symbol"]} 无法获取新鲜报价。止损/止盈监测暂时不可靠，请自行检查。\n地址 {p["address"]}',now,p['id'])
+    diagnostic=diagnostic or {};health=db.execute('SELECT * FROM position_quote_health WHERE position_id=?',(p['id'],)).fetchone()
+    if health and health['last_quote_time'] is not None and -60000<=now*1000-health['last_quote_time']<=MAX_AGE_MS:return
+    failed_since=health['failed_since'] if health and health['failed_since'] is not None else now
+    reason=diagnostic.get('reason','quote_unavailable')
+    db.execute('''INSERT INTO position_quote_health(position_id,failed_since,last_failure,reason) VALUES(?,?,?,?)
+                  ON CONFLICT(position_id) DO UPDATE SET failed_since=excluded.failed_since,last_failure=excluded.last_failure,reason=excluded.reason''',
+               (p['id'],failed_since,now,reason))
+    if now-failed_since<120:return
+    base=f'position-missing:{p["id"]}'
+    if db.execute("SELECT 1 FROM important_alerts WHERE base=? AND state IN ('open','acknowledged','expired')",(base,)).fetchone():return
+    label='参考仓（假定买入，未核实成交）' if p['mode']=='reference' else '实际成本登记仓'
+    explanation={'ticker_stale_or_future':'接口返回的成交时间超出新鲜度范围',
+                 'ticker_unavailable_or_invalid':'报价请求失败或返回数据无效',
+                 'quote_expired_during_scan':'报价在本轮处理过程中已过期'}.get(reason,'暂无符合新鲜度要求的报价')
+    stamp=diagnostic.get('last_quote_time') or (health['last_quote_time'] if health else None)
+    age=f'；距最近已知成交时间/保守下界 {max(0,int(now-stamp/1000))} 秒' if stamp else ''
+    aid=raise_alert(db,base,
+         f'⚠️ {label} #{p["id"]} {p["symbol"]} 无法获取新鲜报价。止损/止盈监测暂时不可靠，请自行检查。\n'
+         f'原因：{explanation}{age}。\n旧价格不会用于触发止盈止损；恢复后通知。\n地址 {p["address"]}',now,p['id'])
+    db.execute('UPDATE position_quote_health SET alert_id=? WHERE position_id=?',(aid,p['id']))
 
 HELP=('Alpha雷达 v3：入场参考自动建立假定买入的参考仓，不下单、不核实成交。\n'
       '/buy BSC合约地址 实际买入均价 [止损百分比 移动回撤百分比]\n'
@@ -75,6 +110,7 @@ HELP=('Alpha雷达 v3：入场参考自动建立假定买入的参考仓，不�
       '默认止损15%；浮盈达到30%后启用20%移动回撤；+50%/+100%/+200%分别提示一次。阈值是可调整假设。\n'
       '/ack 提醒编号 确认已读（不会卖出）\n/pending 查看未确认重要提醒\n/positions 查看实际/参考仓\n/close 持仓编号 结束跟踪（不会卖出）\n'
       '/ranking 查看最近一期关注排序（非实时）\n/performance 前瞻效果报告\n/status 数据与模拟观察状态\n/help 查看帮助\n'
+      '/trend 查看已登记实际持仓的最近走势分析（存档，非实时）\n'
       '仅支持BSC现货成本登记，不计算杠杆/强平；请勿发送 Token、私钥或助记词。')
 
 def handle_command(db,text,data,request_key,now):
@@ -82,6 +118,13 @@ def handle_command(db,text,data,request_key,now):
     if not parts:return HELP
     command=parts[0].split('@')[0].lower()
     if command in ('/help','/start'):return HELP
+    if command in ('/trend','/analysis'):
+        try:
+            report=json.loads((Path(data)/'position-trends.json').read_text())
+            active={p['id'] for p in open_positions(db) if p['mode']=='actual'}
+            rows=[r for r in report.get('rows',[]) if r.get('position_id') in active]
+            return ('最近一次实际持仓分析存档，不是即时成交报价。\n\n'+'\n\n'.join(r['text'].replace('行情有效，可供规则复核。','该结论仅对分析时有效；当前新鲜度请核对行情时间。') for r in rows)) if rows else '暂无实际持仓走势分析；参考仓不会当作真实持仓。'
+        except (OSError,ValueError,KeyError):return '走势分析尚未生成或暂时不可用；不会使用旧价格判断止盈止损。'
     if command=='/ranking':
         row=db.execute("SELECT value FROM runtime WHERE key='ranking_latest'").fetchone()
         if not row:return '关注排序尚未生成。默认每6小时推送一期。'

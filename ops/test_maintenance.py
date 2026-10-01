@@ -135,6 +135,29 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(set(report['accounts']), {'binancezh'})
         self.assertEqual(report['missing_account_health'], ['binancewallet'])
 
+    def test_message_audit_is_read_only_and_counts_channels_separately(self):
+        path=self.root/'messages.sqlite'
+        with sqlite3.connect(path) as db:
+            db.executescript('''CREATE TABLE runtime(key TEXT PRIMARY KEY,value TEXT);
+                CREATE TABLE outbox(key TEXT PRIMARY KEY,created REAL,payload TEXT,state TEXT,attempts INTEGER,sent REAL);''')
+            health={'status':'partial','as_of':100,'safety_coverage':{'arc':{'partial_fields':2}}}
+            db.execute('INSERT INTO runtime VALUES(?,?)',('health',json.dumps(health)))
+            for key,channel,state,body in [('a','telegram','sent','关键安全字段缺失'),('b','telegram','sent','关键安全字段缺失'),
+                    ('c','dingtalk','sent','关键安全字段缺失'),('d','telegram','pending','安全接口限流/异常，退避中'),
+                    ('important:1:1','telegram','sent','无法获取新鲜报价'),('important:1:2','telegram','sent','无法获取新鲜报价')]:
+                db.execute('INSERT INTO outbox VALUES(?,?,?,?,?,?)',(key,99,json.dumps({'channel':channel,'text':body}),state,1,100 if state=='sent' else None))
+        before=path.read_bytes()
+        result=m.database_report(path,'meme',101)
+        audit=result['message_audit_7d_retained']
+        self.assertEqual(audit['telegram']['symptoms']['safety_fields_missing'],2)
+        self.assertEqual(audit['telegram']['identical_body_extra_sends'],1)
+        self.assertEqual(audit['dingtalk']['identical_body_extra_sends'],0)
+        self.assertNotIn('provider_backoff',audit['telegram']['symptoms'])
+        compact=m.compact_report({'as_of_utc':'now','radars':{'meme':result}})
+        self.assertEqual(compact['radars']['meme']['safety_coverage'],health['safety_coverage'])
+        self.assertEqual(path.read_bytes(),before)
+        self.assertNotIn('text',json.dumps(compact))
+
 
 if __name__ == '__main__':
     unittest.main()

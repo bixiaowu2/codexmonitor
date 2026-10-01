@@ -9,7 +9,7 @@ from net import get_json, FetchError
 # Verified against GoPlus /api/v1/supported_chains on 2026-09-27.
 # 2020 is NOT Robinhood. Identity must be chain + exact contract, never symbol.
 EVM_CHAIN_IDS = {'bsc': '56', 'xlayer': '196', 'robinhood': '4663', 'arc': '5042', 'stable': '988'}
-POLICY_VERSION = 'goplus-screen-v1'
+POLICY_VERSION = 'goplus-screen-v1.1-coverage'
 
 
 def flag(value):
@@ -59,7 +59,8 @@ def top10(result):
 
 def unknown(reason, provider='goplus'):
     return {'status': 'unknown', 'blocks': [], 'warnings': [reason], 'provider': provider,
-            'eligible': False, 'policy': POLICY_VERSION, 'sell_simulated': False}
+            'eligible': False, 'policy': POLICY_VERSION, 'sell_simulated': False,
+            'coverage_status': 'unavailable'}
 
 
 def assess(chain, result):
@@ -119,8 +120,10 @@ def assess(chain, result):
         if flag(result.get(key)) is True:
             warnings.append(label)
     share = top10(result)
+    coverage_missing = list(missing)
     if share is None:
         warnings.append('持仓集中度数据缺失或无效')
+        coverage_missing.append('holders')
     elif share >= .90:
         blocks.append(f'已报告前十大户持仓集中约{share:.1%}（排除已标记池/销毁地址）')
     elif share >= .50:
@@ -130,6 +133,8 @@ def assess(chain, result):
         warnings.append('关键安全字段缺失：' + ','.join(missing))
     status = 'blocked' if blocks else 'unknown' if missing else 'safe'
     return {'status': status, 'blocks': blocks, 'warnings': warnings, 'missing': missing,
+            'coverage_status': 'partial_fields' if coverage_missing else 'complete_reported_fields',
+            'coverage_missing': sorted(set(coverage_missing)),
             'top10_share': share, 'provider': 'goplus', 'eligible': status == 'safe' and not warnings,
             'policy': POLICY_VERSION, 'sell_simulated': False}
 
@@ -145,6 +150,7 @@ class Checker:
         self.api_errors = 0
         self.cache_hits = 0
         self.backoff_until = self.cache.pop('_backoff_until', 0)
+        self.backoff_reason = self.cache.pop('_backoff_reason', 'provider_error')
         now = time.time()
         self.cache = {k: v for k, v in self.cache.items() if isinstance(v, dict)
                       and isinstance(v.get('checked_at'), (int, float))
@@ -173,11 +179,15 @@ class Checker:
         if self.requests >= self.max_checks or remaining < 1:
             return unknown('本轮安全检查预算已用完', 'budget')
         if self.backoff_until > time.time():
-            return unknown('安全接口限流/异常，退避中', 'backoff')
+            label='安全接口限流（HTTP 429）' if self.backoff_reason=='http_429' else '安全接口暂时不可用（'+self.backoff_reason+'）'
+            out=unknown(label+'，预计 '+time.strftime('%H:%M:%S UTC',time.gmtime(self.backoff_until))+' 后重试', 'backoff')
+            out.update(retry_at=self.backoff_until, api_error=self.backoff_reason)
+            return out
         self.requests += 1
         try:
             endpoint = 'solana/token_security' if chain == 'solana' else 'token_security/' + EVM_CHAIN_IDS[chain]
             raw = get_json('https://api.gopluslabs.io/api/v1/' + endpoint + '?contract_addresses=' + quote(addr, safe=''), min(self.timeout, remaining))
+            if isinstance(raw,dict) and str(raw.get('code'))=='429':raise FetchError('http_429')
             if not isinstance(raw, dict) or str(raw.get('code')) != '1' or not isinstance(raw.get('result'), dict):
                 raise FetchError('invalid_schema_or_api_rejected')
             # Case-insensitive EVM matching; never lowercase a Solana mint.
@@ -189,14 +199,19 @@ class Checker:
         except Exception as exc:
             self.api_errors += 1
             code = exc.code if isinstance(exc, FetchError) else type(exc).__name__
-            out = unknown('安全接口不可用：' + code)
+            out = unknown('供应商未返回该合约的安全数据' if code=='missing_result' else '安全接口不可用：' + code)
             out['api_error'] = code
-            # Stop repeated calls on a degraded public provider for this round.
-            self.backoff_until = time.time() + 60
+            # Missing coverage or a malformed token result is not a provider-wide outage.
+            systemic=(code=='http_429' or code.startswith('http_5') or code in
+                      ('TimeoutError','URLError','ConnectionResetError','ConnectionError','timeout'))
+            if systemic:
+                self.backoff_until = time.time() + max(60,getattr(exc,'retry_after',None) or 0)
+                self.backoff_reason = code
+                out['retry_at'] = self.backoff_until
         out.update(checked_at=time.time(), address=addr, chain=chain)
         self.cache[key] = out
         return out
 
     def snapshot(self):
         entries = sorted(self.cache.items(), key=lambda kv: kv[1]['checked_at'], reverse=True)[:2000]
-        return dict(entries, _backoff_until=self.backoff_until)
+        return dict(entries, _backoff_until=self.backoff_until, _backoff_reason=self.backoff_reason)

@@ -8,6 +8,7 @@ def read_json(path,default):
     except (OSError,ValueError):return default
 
 def valid_event(e,now):
+    if not isinstance(e,dict):return False
     try: age=now-float(e.get('observed_at',0))
     except (ValueError,TypeError):return False
     return isinstance(e,dict) and 0<=age<=86400 and e.get('chain') and str(e.get('url') or e.get('source') or '').startswith('https://')

@@ -4,6 +4,7 @@ import argparse,concurrent.futures,json,subprocess,time
 from pathlib import Path
 from urllib.parse import urlencode
 import radar,strategy
+from quotes import get_quote,valid
 from cloud import Store
 from positions import initialize,open_positions,position_tick,missing_position,emit,VERSION
 from alerts import raise_alert,resolve
@@ -77,20 +78,22 @@ def run(store):
     for a in sorted(eligible,key=lambda a:-(radar.num(tokens[a].get('percentChange24h')) or 0)):
         if len(selected)>=12:break
         if a not in selected:selected.append(a)
-    ids={p['address']:p['alpha_id'] for p in positions}
+    position_addresses={p['address'] for p in positions}
+    ids={p['address']:tokens.get(p['address'],{}).get('alphaId',p['alpha_id']) for p in positions}
     ids.update({a:tokens[a]['alphaId'] for a in setups+selected})
     def observe(item):
-        address,alpha=item;q=None;fx=None;error=None
-        try:q=strategy.fresh_quote(fetch(radar.ALPHA+'/ticker',{'symbol':alpha+'USDT'}),time.time())
-        except Exception:return address,q,fx,'quote_unavailable_or_stale'
+        address,alpha=item;fx=None;error=None
+        q,diagnostic=get_quote(fetch,alpha,fallback=address in position_addresses)
+        if not q:return address,q,fx,diagnostic['reason'],diagnostic
         if address in selected:
             try:fx=quarter_signal(radar.candles(fetch(radar.ALPHA+'/klines',{'symbol':alpha+'USDT','interval':'15m','limit':20})),time.time())
             except Exception:error='quarter_data_unavailable'
-        return address,q,fx,error
-    samples={};skipped=[]
+        return address,q,fx,error,diagnostic
+    samples={};skipped=[];diagnostics={}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        for address,q,fx,error in pool.map(observe,ids.items()):
+        for address,q,fx,error,diagnostic in pool.map(observe,ids.items()):
             samples[address]=(q,fx)
+            diagnostics[address]=diagnostic
             if error:skipped.append({'address':address,'error':error})
     now=time.time();alerts=0
     with store.db() as db:
@@ -99,10 +102,12 @@ def run(store):
             p=db.execute('SELECT * FROM positions WHERE id=? AND closed IS NULL',(old['id'],)).fetchone()
             if p is None:continue
             q=samples.get(p['address'],(None,None))[0]
-            if q and now*1000-q['time']<=180000:
+            if valid(q,now):
                 position_tick(db,p,q,radar.num(tokens.get(p['address'],{}).get('liquidity')),now)
             else:
-                missing_position(db,p,now);errors.append('position_quote_unavailable')
+                detail=dict(diagnostics.get(p['address'],{}))
+                if q:detail['reason']='quote_expired_during_scan'
+                missing_position(db,p,now,detail);errors.append('position_quote_unavailable')
         for address,(q,fx) in samples.items():
             if q:evaluation.observe(db,address,q,now)
         for address in setups:
@@ -121,7 +126,7 @@ def run(store):
                 emit(db,f'quarter-watch:{address}:{fx["end"]}',f'👀 15分钟异动预警 · {tokens[address]["symbol"]}\n量比 {fx["volume_ratio"]:.2f}；15分钟涨幅 {fx["change"]:+.1%}\n最新参考报价 {q["price"]:.8g} USDT\n地址 {address}\n尚未得到小时突破确认，安全与机构归属未核实；不是买入参考，未建立假定买入仓。',now)
                 alerts+=1
         db.execute('INSERT OR REPLACE INTO runtime VALUES(?,?)',('quarter_checked',json.dumps({a:t for a,t in rotation.items() if a in tokens})))
-    return {'as_of':radar.utc(),'version':VERSION,'status':'partial' if errors else 'ok','errors':sorted(set(errors)),'skipped':len(skipped),'positions_checked':len(positions),'setups_checked':len(setups),'quarter_checked':len(selected),'directory_size':len(tokens),'directory_observed':catalog.get('observed'),'alerts':alerts,'elapsed':round(time.time()-start,2)}
+    return {'as_of':radar.utc(),'version':VERSION,'status':'partial' if errors else 'ok','errors':sorted(set(errors)),'skipped':len(skipped),'positions_checked':len(positions),'position_quotes':{a:diagnostics[a] for a in position_addresses if a in diagnostics},'setups_checked':len(setups),'quarter_checked':len(selected),'directory_size':len(tokens),'directory_observed':catalog.get('observed'),'alerts':alerts,'elapsed':round(time.time()-start,2)}
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--data',required=True);args=p.parse_args();store=Store(args.data)

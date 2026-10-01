@@ -83,8 +83,8 @@ class TestStock(unittest.TestCase):
     def test_market_groups_are_separate(self):
         rows=[{'symbol':'000001.SZ','region':'中国A股'},{'symbol':'NVDA','region':'美国'},{'symbol':'ASML','region':'欧洲'}]
         groups=grouped_rows(rows)
-        self.assertEqual([r['symbol'] for r in groups['中国股票']], ['000001.SZ'])
-        self.assertEqual([r['symbol'] for r in groups['美国股票']], ['NVDA'])
+        self.assertEqual([r['symbol'] for r in groups['A股']], ['000001.SZ'])
+        self.assertEqual([r['symbol'] for r in groups['美股']], ['NVDA'])
         self.assertEqual([r['symbol'] for r in groups['其他市场']], ['ASML'])
 
     def test_separate_market_queues_and_hourly_dedup(self):
@@ -98,24 +98,24 @@ class TestStock(unittest.TestCase):
         with patch('radar.time.time',return_value=time.time()//3600*3600+60):
             report=cycle(cfg,self.store,collector,cn+us)
             cycle(cfg,self.store,collector,cn+us)
-        self.assertEqual(len(report['markets']['中国股票']),5)
-        self.assertEqual(len(report['markets']['美国股票']),5)
+        self.assertEqual(len(report['markets']['A股']),5)
+        self.assertEqual(len(report['markets']['美股']),5)
         with self.store.db() as d:
             messages=[json.loads(r[0]) for r in d.execute("SELECT payload FROM outbox WHERE key LIKE '%:ranking:%'")]
         self.assertEqual(len(messages),4)
         for m in messages:
-            self.assertNotIn('US0',m['text']) if m['market']=='中国股票' else self.assertNotIn('000000.SZ',m['text'])
+            self.assertNotIn('US0',m['text']) if m['market']=='A股' else self.assertNotIn('000000.SZ',m['text'])
             self.assertLess(len(m['text']),4096)
     def test_listing_market_overrides_domicile(self):
         universe=json.loads((Path(__file__).parent/'universe.json').read_text())
         groups={r['symbol']:market_group(r) for r in universe}
-        for symbol in ('ASML','TSM','ARM'):self.assertEqual(groups[symbol],'美国股票')
+        for symbol in ('ASML','TSM','ARM'):self.assertEqual(groups[symbol],'美股')
         self.assertEqual(groups['005930.KS'],'其他市场')
 
     def test_hk_stock_is_china_group_with_hk_label(self):
-        row={'symbol':'0981.HK','region':'中国香港','market_group':'中国股票','market_subgroup':'港股'}
-        self.assertEqual(market_group(row),'中国股票')
-        self.assertEqual(market_label(row),'中国股票·港股')
+        row={'symbol':'0981.HK','region':'中国香港','market_group':'A股','market_subgroup':'港股'}
+        self.assertEqual(market_group(row),'港股')
+        self.assertEqual(market_label(row),'港股')
 
     def test_forward_ledger_records_horizons_and_peak(self):
         now=1000000.0
@@ -142,7 +142,7 @@ class TestStock(unittest.TestCase):
         self.assertEqual(len(report['events']),1)
         with self.store.db() as db:
             track=db.execute('SELECT * FROM forward_tracks').fetchone()
-            self.assertEqual(track['market'],'中国股票·港股')
+            self.assertEqual(track['market'],'港股')
             self.assertEqual(db.execute('SELECT COUNT(*) FROM outbox').fetchone()[0],0)
 
 if __name__ == '__main__': unittest.main()

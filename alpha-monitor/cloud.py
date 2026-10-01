@@ -88,6 +88,7 @@ class Store:
                   state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,
                   next_try REAL NOT NULL DEFAULT 0,sent REAL,error TEXT);
                 CREATE TABLE IF NOT EXISTS runtime(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(id) WHERE state='pending';
                 CREATE TRIGGER IF NOT EXISTS telegram_event AFTER INSERT ON events BEGIN
                   INSERT OR IGNORE INTO outbox(key,created,payload)
                     VALUES('market:'||NEW.asset||':'||NEW.event||':'||
@@ -292,7 +293,8 @@ def run(config):
             while not stop.is_set():
                 now=time.time();beat[0]=time.monotonic()
                 if not notifier.is_alive():raise RuntimeError('Notification worker stopped')
-                if not running and not fast_running and now>=fast_due:fast_scan.start();fast_running=True
+                # Fast position checks must not wait for the slower universe/risk scan.
+                if not fast_running and now>=fast_due:fast_scan.start();fast_running=True
                 if fast_running:
                     fast_status=fast_scan.poll()
                     if fast_status is not None:

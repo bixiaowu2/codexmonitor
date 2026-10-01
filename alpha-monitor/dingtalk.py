@@ -19,6 +19,7 @@ def initialize(store):
           id INTEGER PRIMARY KEY,key TEXT UNIQUE NOT NULL,created REAL NOT NULL,payload TEXT NOT NULL,
           state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,
           next_try REAL NOT NULL DEFAULT 0,sent REAL,error TEXT);
+        CREATE INDEX IF NOT EXISTS dingtalk_pending ON dingtalk_outbox(id) WHERE state='pending';
         CREATE TRIGGER IF NOT EXISTS dingtalk_fanout AFTER INSERT ON outbox
           WHEN NEW.key NOT LIKE 'command:%' BEGIN
           INSERT OR IGNORE INTO dingtalk_outbox(key,created,payload) VALUES(NEW.key,NEW.created,NEW.payload);

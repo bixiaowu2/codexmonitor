@@ -97,3 +97,34 @@ retention deployment. Disk after first backup was 69.9% used with 28.84 GiB free
 Live reports still show partial Alpha/Meme coverage, source 429s and missing
 forward endpoints. This maintenance release exposes those gaps; it does not
 repair external data availability or justify new strategy thresholds.
+
+## Actual holdings and daily context
+
+`radar-holdings.service` is a supporting oneshot worker for the existing radars,
+not a fifth radar. Install the six support modules alongside the maintenance
+script and the unit/timer in `/etc/systemd/system/`. It reads the existing
+private environment files; credentials do not belong in this directory or Git.
+The unit limits memory to 192 MiB and CPU to 25%. Only Meme/stock Telegram
+updates are polled here; Alpha retains its existing command consumer.
+
+Actual positions, atomic command offsets and independent delivery queues live
+in `/var/lib/radar-holdings/holdings.sqlite` (directory 0700, database 0600).
+Reference Alpha positions are excluded from actual holding analysis. See
+[Telegram registration](Telegram持仓登记.md) for currency, command formats and
+the meaning of cost updates. The worker cannot place orders.
+
+Daily context is owned by this helper: Alpha/Meme 09:00 Beijing, separate A/HK
+messages at 10:00 Beijing weekdays, US 10:00 New York weekdays with DST. The
+30-minute queue window prevents late stale morning catchups. Empty/closed-market
+coverage stays explicit. Each message includes the relevant registration format.
+Do not also enable an older daily-summary implementation in a radar: it would
+create competing daily messages.
+
+Maintenance includes helper health and backs up its database. Sent-message
+symptom counts indicate missing data or ambiguous wording, not proven trading
+losses; X still lacks a complete historical sent-message ledger.
+
+Rollback only the helper: stop/disable `radar-holdings.timer`, wait for the
+oneshot to finish, and restore support code from the release backup if needed.
+Keep its journal and the four original services. Never restore a live SQLite
+database over writers. Release details are in [the release record](发布记录-20261001.md).

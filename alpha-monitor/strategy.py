@@ -5,6 +5,7 @@ from pathlib import Path
 from radar import ALPHA,TOKENS,FUTURES,PublicAPI,candles,num,ratio,utc,dump,universe
 from safety import inspect,unlock_override,entity_evidence
 from positions import VERSION,initialize,emit,open_positions,position_tick,missing_position,reference_position
+from quotes import get_quote,valid
 
 HOUR=3600000
 
@@ -129,7 +130,8 @@ def scan(args,store,daily=None):
     # Active setups are revisited even when they fail a new gate; bounded by signal slots.
     setups=[a for a,s in states.items() if s.get('setup_end') and now-s.get('setup_seen',0)<86400 and not s.get('invalid') and a in byaddr]
     selected=list(dict.fromkeys(setups+selected))[:budget+24]
-    required={p['address']:p['alpha_id'] for p in positions}
+    position_addresses={p['address'] for p in positions}
+    required={p['address']:byaddr.get(p['address'],{}).get('alphaId',p['alpha_id']) for p in positions}
     required.update({p['address']:byaddr[p['address']]['alphaId'] for p in papers if p['address'] in byaddr})
     required.update({a:byaddr[a]['alphaId'] for a in selected})
     attempts=store.state('evaluation_quote_attempts',{})
@@ -138,10 +140,8 @@ def scan(args,store,daily=None):
     store.put('evaluation_quote_attempts',attempts)
     def fetch(item):
         address,alpha=item
-        try:raw_quote=api.data(ALPHA+'/ticker',{'symbol':alpha+'USDT'})
-        except Exception:return address,None,None,'quote_unavailable'
-        try:q=fresh_quote(raw_quote,time.time())
-        except ValueError:return address,None,None,'quote_missing_or_stale'
+        q,diagnostic=get_quote(api.data,alpha,fallback=address in position_addresses)
+        if not q:return address,None,None,'quote_missing_or_stale',diagnostic
         fx=None;error=None
         if address in selected:
             st=states.get(address,{});target=int(time.time()*1000)//HOUR*HOUR-1
@@ -149,11 +149,12 @@ def scan(args,store,daily=None):
             else:
                 try:fx=hourly_features(candles(api.data(ALPHA+'/klines',{'symbol':alpha+'USDT','interval':'1h','limit':60})),time.time())
                 except Exception:error='hourly_data_unavailable'
-        return address,q,fx,error
-    results={}
+        return address,q,fx,error,diagnostic
+    results={};diagnostics={}
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        for address,q,fx,error in pool.map(fetch,required.items()):
+        for address,q,fx,error,diagnostic in pool.map(fetch,required.items()):
             results[address]=(q,fx)
+            diagnostics[address]=diagnostic
             if error:
                 target=skipped if error=='quote_missing_or_stale' and address not in {p['address'] for p in positions} else errors
                 target.append({'address':address,'error':error})
@@ -179,8 +180,11 @@ def scan(args,store,daily=None):
             p=db.execute('SELECT * FROM positions WHERE id=? AND closed IS NULL',(p['id'],)).fetchone()
             if p is None:continue
             q=(results.get(p['address']) or (None,None))[0]
-            if q and now*1000-q['time']<=180000:position_tick(db,p,q,num(byaddr.get(p['address'],{}).get('liquidity')),now)
-            else:missing_position(db,p,now)
+            if valid(q,now):position_tick(db,p,q,num(byaddr.get(p['address'],{}).get('liquidity')),now)
+            else:
+                detail=dict(diagnostics.get(p['address'],{}))
+                if q:detail['reason']='quote_expired_during_scan'
+                missing_position(db,p,now,detail)
             risk=risks.get(p['address'],{})
             if risk.get('flags') or risk.get('unlock',{}).get('large_unlock_soon'):
                 emit(db,f'position-security:{p["id"]}:{int(now//86400)}',f'⚠️ 持仓 #{p["id"]} {p["symbol"]} 链上/解锁风险\n'+('；'.join(risk.get('flags',[])) or '已录入披露显示7日内解锁≥当前流通量5%')+'\n第三方/人工披露需复核，不执行卖出。',now)

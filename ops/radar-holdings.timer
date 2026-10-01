@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll authorized holding commands and refresh due position reviews
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=60
+AccuracySec=5
+Unit=radar-holdings.service
+
+[Install]
+WantedBy=timers.target

@@ -26,10 +26,14 @@ def resolve(db,base,now):
 
 def cancel_pending(db):
     # Stop unsent repeats after /ack, /close or recovery. Already accepted messages cannot be recalled.
-    for row in db.execute("SELECT id FROM important_alerts WHERE state<>'open'"):
-        for table in ('outbox','dingtalk_outbox'):
-            if db.execute('SELECT 1 FROM sqlite_master WHERE name=?',(table,)).fetchone():
-                db.execute(f"UPDATE {table} SET state='skipped',error='acknowledged_or_resolved' WHERE state='pending' AND key LIKE ?",(f'important:{row[0]}:%',))
+    # Work from the small pending queue, not every historical alert x every outbox row.
+    for table in ('outbox','dingtalk_outbox'):
+        if db.execute('SELECT 1 FROM sqlite_master WHERE name=?',(table,)).fetchone():
+            db.execute(f"""UPDATE {table} SET state='skipped',error='acknowledged_or_resolved'
+                WHERE state='pending' AND key LIKE 'important:%'
+                AND EXISTS (SELECT 1 FROM important_alerts a
+                    WHERE a.id=CAST(substr({table}.key,11,instr(substr({table}.key,11),':')-1) AS INTEGER)
+                    AND {table}.key LIKE 'important:' || a.id || ':%' AND a.state<>'open')""")
 
 def reminders(store,now=None):
     now=time.time() if now is None else now

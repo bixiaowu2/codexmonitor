@@ -3,6 +3,7 @@
 import argparse
 import collections
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -210,6 +211,19 @@ def outcomes(db, table, now):
     return {'groups': result, 'unavailable_horizons': ['1h', '6h'] if alpha else []}
 
 
+def message_flags(payload):
+    """Symptoms in sent messages, not proof of bad trades or complete missing-message detection."""
+    body=payload.get('text','')
+    if not isinstance(body,str):return []
+    patterns={'quote_unavailable':('无法获取新鲜报价',),
+              'no_fresh_market_quotes':('没有新鲜5分钟行情',),
+              'safety_fields_missing':('关键安全字段缺失','供应商未返回有效','持仓集中度数据缺失'),
+              'provider_backoff':('退避中','后重试'),
+              'ambiguous_risk_reason':('安全状态或流动性恶化',),
+              'safety_data_gap':('Meme安全数据缺口',)}
+    return [name for name,needles in patterns.items() if any(needle in body for needle in needles)]
+
+
 def database_report(path, name, now):
     with read_db(path) as db:
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -222,16 +236,32 @@ def database_report(path, name, now):
                 stamp = datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
             except ValueError:
                 stamp = None
-        channels = {}
+        channels = {}; message_audit={}; body_counts={}
         for table in ('outbox', 'dingtalk_outbox'):
             if table not in tables:
                 continue
-            for row in db.execute('SELECT state,attempts,created,sent,payload FROM ' + table + ' WHERE created>=?', (now - 7 * DAY,)):
-                channel = ('dingtalk' if table == 'dingtalk_outbox' else 'telegram') if name == 'alpha' else json.loads(row['payload']).get('channel', 'legacy')
+            for row in db.execute('SELECT key,state,attempts,created,sent,payload FROM ' + table + ' WHERE created>=?', (now - 7 * DAY,)):
+                payload=json.loads(row['payload'])
+                channel = ('dingtalk' if table == 'dingtalk_outbox' else 'telegram') if name == 'alpha' else payload.get('channel', 'legacy')
                 stats = channels.setdefault(channel, {'states': {}, 'retried': 0, 'sent': 0, 'latency_max_seconds': None})
                 stats['states'][row['state']] = stats['states'].get(row['state'], 0) + 1
+                if name=='stock':
+                    market=payload.get('market','event_or_legacy')
+                    per_market=stats.setdefault('markets',{}).setdefault(market,{})
+                    per_market[row['state']]=per_market.get(row['state'],0)+1
                 stats['retried'] += row['attempts'] > (1 if row['state'] == 'sent' else 0)
                 if row['state'] == 'sent' and finite(row['sent']):
+                    audit=message_audit.setdefault(channel,{'sent':0,'symptoms':{},'last_24h_symptoms':{},'identical_body_extra_sends':0})
+                    audit['sent']+=1
+                    for symptom in message_flags(payload):
+                        audit['symptoms'][symptom]=audit['symptoms'].get(symptom,0)+1
+                        if row['sent']>=now-DAY:audit['last_24h_symptoms'][symptom]=audit['last_24h_symptoms'].get(symptom,0)+1
+                    # Explicit acknowledgement reminders intentionally repeat the original incident.
+                    body=payload.get('text')
+                    if isinstance(body,str) and body and not row['key'].startswith('important:'):
+                        signature=(channel,hashlib.sha256(body.encode()).hexdigest())
+                        body_counts[signature]=body_counts.get(signature,0)+1
+                        audit['identical_body_extra_sends']+=int(body_counts[signature]>1)
                     stats['sent'] += 1
                     delay = row['sent'] - row['created']
                     stats['latency_max_seconds'] = max(stats['latency_max_seconds'] or 0, delay)
@@ -243,6 +273,9 @@ def database_report(path, name, now):
                 'last_observation_age_seconds': max(0, now - stamp) if finite(stamp) else None,
                 'version': health.get('version'), 'source_errors': health.get('errors', []),
                 'delivery_7d_retained': channels,
+                'message_audit_7d_retained':message_audit,
+                'safety_coverage':health.get('safety_coverage',runtime.get('latest',{}).get('safety_coverage',{})),
+                'market_coverage':runtime.get('latest',{}).get('data_quality',{}).get('by_market',{}),
                 'outcomes': outcomes(db, 'evaluation_tracks' if name == 'alpha' else 'forward_tracks', now)}
 
 
@@ -264,7 +297,12 @@ def make_report(databases, x_state, now):
                 try:
                     value = json.loads(path.read_text())
                     report['radars']['alpha'][key] = {k: value[k] for k in (
-                        'as_of', 'version', 'rule_version', 'status', 'errors', 'positions_by_mode') if k in value}
+                        'as_of', 'version', 'rule_version', 'status', 'errors', 'positions_by_mode','elapsed','positions_checked') if k in value}
+                    if key=='fast_lane':
+                        counts={}
+                        for quote in value.get('position_quotes',{}).values():
+                            reason=quote.get('reason','unknown');counts[reason]=counts.get(reason,0)+1
+                        report['radars']['alpha'][key]['quote_reason_counts']=counts
                 except (OSError, ValueError):
                     report['radars']['alpha'][key] = {'error': 'unreadable'}
     try:
@@ -283,6 +321,7 @@ def make_report(databases, x_state, now):
             'missing_account_health': sorted(accounts - set(health.get('accounts', {}))),
             'pending_posts': len(value.get('pending', {})),
             'missed_posts': None, 'historical_delivery_failures': None,
+            'message_audit_7d_retained':{'available':False,'reason':'no_complete_sent_message_ledger'},
         }
     except Exception as exc:
         report['radars']['x'] = {'error': type(exc).__name__}
@@ -295,6 +334,7 @@ def make_report(databases, x_state, now):
 def compact_report(report):
     summary = {k: report[k] for k in ('as_of_utc', 'services', 'disk', 'backup_errors') if k in report}
     summary['radars'] = {}
+    if 'position_support' in report:summary['position_support']=report['position_support']
     for name, value in report['radars'].items():
         item = {k: value[k] for k in ('status', 'error', 'version', 'last_observation_age_seconds',
                 'heartbeat_age_seconds', 'accounts', 'missing_account_health', 'pending_posts') if k in value}
@@ -303,6 +343,9 @@ def compact_report(report):
         if 'fast_lane' in value:
             item['fast_lane'] = value['fast_lane']
         item['delivery_7d_retained'] = value.get('delivery_7d_retained', {})
+        item['message_audit_7d_retained']=value.get('message_audit_7d_retained',{})
+        if value.get('safety_coverage'):item['safety_coverage']=value['safety_coverage']
+        if value.get('market_coverage'):item['market_coverage']=value['market_coverage']
         endpoints = {}
         tracks = 0
         cohorts = []
@@ -330,6 +373,14 @@ def main():
     now = time.time()
     disk = disk_status(shutil.disk_usage('/'))
     report = make_report(DATABASES, X_STATE, now)
+    holdings=Path('/var/lib/radar-holdings/holdings.sqlite')
+    if holdings.exists():
+        try:
+            with read_db(holdings) as db:
+                row=db.execute("SELECT value FROM runtime WHERE key='health'").fetchone()
+                support=json.loads(row[0]) if row else {}
+                report['position_support']={k:support[k] for k in ('version','as_of','commands','errors','positions','checked','fresh','stale_or_missing','delivery') if k in support}
+        except Exception as exc:report['position_support']={'error':type(exc).__name__}
     report['disk'] = disk
     report['raw_expired_bytes'] = prune_raw(DATABASES['alpha'].parent / 'raw', now, args.apply)
     if args.apply:
@@ -337,7 +388,9 @@ def main():
         os.chmod(HOME, 0o700)
         errors = []
         try:
-            backups(HOME, DATABASES, X_STATE, now)
+            backup_sources=dict(DATABASES)
+            if holdings.exists():backup_sources['holdings']=holdings
+            backups(HOME, backup_sources, X_STATE, now)
         except Exception as exc:
             errors.append(type(exc).__name__)
         report['backup_errors'] = errors

@@ -1,0 +1,23 @@
+[Unit]
+Description=Actual holding trend references for existing Alpha Meme and stock radars
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/alpha-radar.env
+EnvironmentFile=/etc/meme-radar.env
+EnvironmentFile=/etc/stock-radar.env
+ExecStart=/usr/bin/python3 /opt/radar-maintenance/holdings_service.py
+StateDirectory=radar-holdings
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/radar-holdings /var/lib/alpha-radar
+MemoryMax=192M
+CPUQuota=25%
+Nice=10
+TimeoutStartSec=180

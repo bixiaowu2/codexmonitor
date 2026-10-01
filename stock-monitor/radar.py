@@ -8,31 +8,9 @@ from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
 from collections import Counter
 
-VERSION = 'stock-v0.5.1'
+VERSION = 'stock-v0.5.2'
 
-def market_group(row):
-    explicit = row.get('market_group')
-    if explicit in ('中国股票', '美国股票', '其他市场'):
-        return explicit
-    # Listing market, not issuer domicile. Unknown instruments stay unclassified.
-    symbol = str(row.get('symbol', ''))
-    if symbol.endswith(('.SS', '.SZ', '.HK', '.BJ')):
-        return '中国股票'
-    if row.get('region') in ('US', '美国'):
-        return '美国股票'
-    return '其他市场'
-
-def grouped_rows(rows):
-    groups = {'中国股票': [], '美国股票': [], '其他市场': []}
-    for row in rows:
-        groups[market_group(row)].append(row)
-    for group in groups.values():
-        group.sort(key=lambda r: (-r.get('score_meta', {}).get('score', 0), r['symbol']))
-    return groups
-
-def market_label(row):
-    subgroup = row.get('market_subgroup')
-    return f'{market_group(row)}·{subgroup}' if subgroup else market_group(row)
+from markets import market_group, grouped_rows, market_label
 
 def data_quality(rows, statuses):
     reasons=Counter(r.get('fresh_reason','unknown') for r in rows if not r.get('fresh'))
@@ -54,6 +32,12 @@ def fmt(row, s):
 def cycle(cfg, store, collector=None, universe=None):
     universe = load_universe(cfg.universe) if universe is None else universe
     rows, statuses = (collector or Collector(cfg.timeout)).collect(universe)
+    coverage={label:{'configured':len(group),'fetched':0,'fresh':0,'source_errors':0} for label,group in grouped_rows(universe).items()}
+    identities={item['symbol']:item for item in universe}
+    for row in rows:
+        counts=coverage[market_group(row)];counts['fetched']+=1;counts['fresh']+=int(bool(row.get('fresh')))
+    for status in statuses:
+        if status.get('status')!='ok':coverage[market_group(identities.get(status.get('symbol'),{'symbol':status.get('symbol')}))]['source_errors']+=1
     for row in rows: row['score_meta'] = score(row)
     rows.sort(key=lambda r: (-r['score_meta']['score'], r['symbol']))
     rows = [r for group in grouped_rows(rows).values() for r in group[:cfg.max_candidates]]
@@ -83,12 +67,13 @@ def cycle(cfg, store, collector=None, universe=None):
         if not channels or not group:
             continue
         text = f'股票雷达 · {label}关注排序（按上市交易市场）\n'
-        text += time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(now)) + '\n研究样本，不代表买入\n\n'
+        text += time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(now)) + '\n研究样本，不代表买入\n'
+        c=coverage[label];text+=f'本市场池 {c["configured"]} 只；获取 {c["fetched"]}；新鲜 {c["fresh"]}；接口错误 {c["source_errors"]}\n\n'
         text += '\n\n'.join(f'{i+1}. {fmt(r, r["score_meta"])}' for i, r in enumerate(group[:5]))
         for ch in channels:
             store.enqueue(f'{VERSION}:ranking:{label}:{bucket}:{ch}', {'channel': ch, 'market': label, 'text': text}, now)
     with store.db() as d: forward=forward_summary(d)
-    quality=data_quality(rows,statuses)
+    quality=data_quality(rows,statuses);quality['by_market']=coverage
     if not fresh_rows:
         status_key=f'{VERSION}:status:{time.strftime("%Y-%m-%d",time.gmtime(now))}'
         if channels:

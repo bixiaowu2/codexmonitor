@@ -25,7 +25,7 @@ def normalize_pair(pair, chain, source):
        'url':pair.get('url') or '', 'created_at':_num(pair.get('pairCreatedAt')),
        'price_usd':_num(pair.get('priceUsd')),'liquidity_usd':_num((pair.get('liquidity') or {}).get('usd')),
        'fdv':_num(pair.get('fdv')),'market_cap':_num(pair.get('marketCap')),'fetched_at':time.time()}
-    for short,long in [('m5','5m'),('h1','1h'),('h24','24h')]:
+    for short,long in [('m5','5m'),('h1','1h'),('h6','6h'),('h24','24h')]:
         p['volume_'+long]=_num((pair.get('volume') or {}).get(short))
         p['change_'+long]=_num((pair.get('priceChange') or {}).get(short))
         for side in ('buys','sells'): p[side+'_'+long]=_num((tx.get(short) or {}).get(side))
