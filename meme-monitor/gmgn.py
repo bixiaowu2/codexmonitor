@@ -163,7 +163,7 @@ class Client:
                 pair["gmgn"] = item
                 if exc.code in ("gmgn_http_429", "gmgn_backoff", "gmgn_budget"):
                     break
-        status = "ok" if enriched else ("partial" if self.errors else "empty")
+        status = "partial" if self.errors else ("ok" if enriched else "empty")
         return {"status": status, "requests": self.requests, "errors": self.errors,
                 "enriched": enriched, "last_error": self.last_error,
                 "retry_at": self.backoff_until or None}

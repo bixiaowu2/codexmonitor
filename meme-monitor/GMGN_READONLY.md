@@ -14,6 +14,6 @@ GMGN_API_KEY=你的个人APIKey
 
 ## 覆盖边界
 
-当前每轮最多增强 `GMGN_MAX_CHECKS` 个流动性最高的候选，每个候选查询 token info 和 token security。Key 缺失、额度耗尽、IPv4/网络失败或 HTTP 429 时会退避，并保留原有公开 DEX 数据；消息会显示 GMGN 状态和增强数量。GMGN 返回的字段保存在候选的 `gmgn` 节点，不直接增加买入评分。
+当前每轮最多增强 `GMGN_MAX_CHECKS` 个流动性最高的候选，默认 1 个；每个候选查询 token info 和 token security。Key 缺失、额度耗尽、IPv4/网络失败或 HTTP 429 时会退避，并保留原有公开 DEX 数据；消息会显示 GMGN 状态和增强数量。GMGN 返回的字段保存在候选的 `gmgn` 节点，不直接增加买入评分。
 
 官方文档列出的 API 链包括 SOL、BSC、Base 等，具体新链覆盖以账号实际响应为准；Arc、Robinhood、Stable、X Layer 不会因为命令参数被假定为已覆盖。

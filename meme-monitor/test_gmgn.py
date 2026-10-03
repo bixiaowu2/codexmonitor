@@ -86,6 +86,26 @@ class TestGmgn(unittest.TestCase):
         self.assertGreater(client.backoff_until, time.time())
         self.assertNotIn('secret-api-key', client.last_error)
 
+    def test_partial_status_when_later_candidate_hits_rate_limit(self):
+        client = Client('key', max_requests=4)
+        pairs = [
+            {'chain': 'bsc', 'address': '0x' + char * 40,
+             'liquidity_usd': liquidity, 'volume_1h': 2000, 'price_usd': None}
+            for char, liquidity in [('a', 2000), ('b', 1000)]
+        ]
+
+        def info(_chain, address):
+            if address.endswith('b' * 40):
+                client.errors += 1
+                raise FetchError('gmgn_http_429')
+            return {'address': address, 'price': {'price': '1'}}
+
+        with patch.object(client, 'token_info', side_effect=info), \
+             patch.object(client, 'token_security', return_value={}):
+            health = client.enrich(pairs, 2)
+        self.assertEqual(health['enriched'], 1)
+        self.assertEqual(health['status'], 'partial')
+
 
 if __name__ == '__main__':
     unittest.main()
