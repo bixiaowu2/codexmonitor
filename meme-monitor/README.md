@@ -35,6 +35,10 @@ Python3.10+标准库，无Docker或模型API调用。Oracle ARM64 Ubuntu24.04用
 
 候选榜展示匹配到的独立账号数、原帖摘要和链接。提及可能是质疑、风险警告或推广，暂不自动判断立场，不加买入评分。当前只关联雷达已采集到的候选合约，尚未根据所有X提及新增链上标的。共享采集异常会在 `runtime.latest.social` 及整体状态中标记。原始KOL帖子仍发往原X群，Meme排名仍发往Meme自己的群。
 
+## Binance Web3 Skills 联动
+
+可选的 `MEME_BINANCE_WEB3_EVIDENCE_FILE` 是 Binance Web3 Skills 的只读交接文件。每行一个 JSON 对象，至少包含 `chain`、精确 `address`、`provider`（必须以 `binance` 开头）和 `checked_at`（Unix 秒），可携带 `audit`、`info`、`rank`、`signal` 或 `rush` 字段。例如 `query-token-audit` 的结果只作为安全证据上下文，`query-token-info` 作为价格/流动性补充，`crypto-market-rank`、`trading-signal` 和 `meme-rush` 作为排名、聪明钱和新币来源记录。程序按链和地址精确匹配，超过 `MEME_BINANCE_WEB3_MAX_AGE` 的记录标为缺失；它们不会覆盖 GoPlus 安全硬门槛、不会直接增加买入分，也不会调用交易或提现能力。没有安装 CLI、认证失败或文件不存在时，雷达仍使用 GeckoTerminal、DexScreener、GoPlus 和 GMGN 的独立路径并在报告中显示状态。
+
 ## 前瞻结果账本
 
 即时信号始终写入 `forward_tracks`，记录 1h/6h/24h/7d 的后续收益、峰值和回撤；通知开关不影响研究样本。

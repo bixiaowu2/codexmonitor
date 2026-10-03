@@ -1,6 +1,7 @@
 """Alpha spot quotes with explicit source time; never refresh a price by fetching it."""
 import time
 from radar import ALPHA, num
+from binance_official import ticker_quote
 
 MAX_AGE_MS = 180000
 
@@ -36,13 +37,21 @@ def get_quote(fetch, alpha_id, fallback=False):
     diagnostic = {'symbol': symbol, 'reason': 'quote_unavailable'}
     try:
         raw = fetch(ALPHA + '/ticker', {'symbol': symbol})
+        # Binance's documented Alpha response has appeared both as a flat
+        # object and under data/list.  Normalize it before the legacy parser.
+        official, official_detail = ticker_quote(raw, alpha_id, time.time(), MAX_AGE_MS)
+        if official:
+            official['source'] = 'alpha_ticker'
+            diagnostic.update(official_detail, source='alpha_ticker', reason='ok')
+            return official, diagnostic
         if not isinstance(raw, dict) or raw.get('symbol', symbol) != symbol:
             raise ValueError('schema_or_symbol')
         price, stamp = num(raw.get('lastPrice')), num(raw.get('closeTime'))
         if price is None or price <= 0 or stamp is None:
             raise ValueError('schema_or_price')
         diagnostic.update(last_quote_time=stamp, age_seconds=round(time.time()-stamp/1000, 1))
-        quote = {'price': price, 'time': stamp, 'source': 'alpha_ticker'}
+        quote = {'price': price, 'time': stamp, 'source': 'alpha_ticker',
+                 'provider': 'binance_alpha_official'}
         if valid(quote, time.time()):
             return quote, dict(diagnostic, reason='ok', source=quote['source'])
         diagnostic['reason'] = 'ticker_stale_or_future'

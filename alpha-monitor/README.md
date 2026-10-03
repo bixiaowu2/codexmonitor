@@ -6,6 +6,8 @@ Python 3.10+ 和 curl 即可，无第三方 Python 包、交易账户、API Key 
 
 v3 增加假定买入参考仓、60秒目标快速检查、15分钟异动预警、重要提醒确认、每6小时候选关注排序与前瞻效果跟踪。频率、参考仓与实际成本的区别，以及新版命令以 [v3升级与效果复盘.md](v3升级与效果复盘.md) 为准。保留小时观察和链上风险字段，基础规则见 [策略与使用说明.md](策略与使用说明.md)；安装和钉钉配置见 [云端部署.md](云端部署.md)。以下原始 `radar.py scan/watch` 命令仍只运行日线模块。
 
+报价层兼容 Binance 官方 Skills Hub 的 Alpha REST 响应（token list、ticker、K线等）。`quotes.py` 只接受与 Alpha ID 对应、时间戳不超过180秒且不是未来的 ticker；嵌套 `data/list` 响应由 `binance_official.py` 规范化。旧的平铺响应和已交易分钟K线继续作为兼容回退，旧数据不会被标成新鲜，交易/提现 CLI 不安装到生产服务。
+
 ## 开始使用
 
 在解压后的 `alpha-radar` 目录执行：

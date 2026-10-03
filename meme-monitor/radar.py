@@ -9,6 +9,8 @@ from forward import observe as observe_forward, register as register_forward, su
 from safety import Checker
 from wallet_rules import evidence as wallet_evidence, render as wallet_text
 from post_rules import evaluate as post_evidence
+from gmgn import Client as GmgnClient
+from binance_web3 import read as read_binance_web3, apply as apply_binance_web3, live_enrich, audit_flags
 VERSION='meme-v0.5.3'
 
 SAFETY_FIELDS={'buy_tax':'买入税','sell_tax':'卖出税','cannot_sell_all':'完整卖出限制',
@@ -89,6 +91,12 @@ def data_quality(statuses, social_health):
 def fmt(p,s):
     risk='；'.join(r for r in s.get('risk',[]) if r not in p.get('safety_warnings',[])) or '请见上方安全状态'
     safety_line=safety_text(p)
+    web3=p.get('binance_web3')
+    web3_line=''
+    if web3:
+        checked=time.strftime('%m-%d %H:%M UTC',time.gmtime(web3.get('checked_at',0)))
+        kinds='、'.join(str(k) for k in ('audit','info','rank','signal','rush') if k in web3)
+        web3_line=f'Binance Web3 Skills只读证据：{web3.get("provider")}；检查 {checked}；类型 {kinds or "未标注"}\n'
     mentions=[e for e in p.get('mention_sources',[]) if e.get('account') and e.get('url')]
     social=f'X提及：{p.get("x_account_count",0)} 个账号（提及不等于利好）\n' if p.get('x_account_count') else ''
     if mentions:social+=f'@{mentions[0]["account"]}：{mentions[0].get("excerpt","")[:60]}\n{mentions[0]["url"]}\n'
@@ -100,6 +108,7 @@ def fmt(p,s):
             f'价格 {p.get("price_usd")} USD；池流动性 {p.get("liquidity_usd")} USD\n'
             f'1h成交额 {p.get("volume_1h")} USD；'+ '、'.join(s.get('reasons') or [])+'\n'
             f'{safety_line}\n'
+            f'{web3_line}'
             f'{timing}{research}'
             f'{wallet_text(p["wallet_research"]) + chr(10) if p.get("wallet_research",{}).get("status")=="provided_evidence" else ""}'
             f'{social}风险：{risk}\n合约 {p["address"]}\n{p.get("url","")}\n'
@@ -115,11 +124,17 @@ def event_text(p, s, kind, previous=None):
     }[kind]
     risk = '；'.join(r for r in s.get('risk',[]) if r not in p.get('safety_warnings',[])) or '请见下方安全状态'
     safety_line=safety_text(p)
+    web3=p.get('binance_web3')
+    web3_line=''
+    if web3:
+        kinds='、'.join(str(k) for k in ('audit','info','rank','signal','rush') if k in web3)
+        web3_line=f'Binance Web3 Skills只读证据：{web3.get("provider")}；类型 {kinds or "未标注"}\n'
     return (f'{title} · {p["symbol"]} · {p["chain"]}\n'
             f'{detail}，当前关注分 {s["score"]}/100\n'
             f'价格 {p.get("price_usd")} USD；池流动性 {p.get("liquidity_usd")} USD；1h成交额 {p.get("volume_1h")} USD\n'
             f'{"、".join(s.get("reasons") or [])}\n风险：{risk}\n'
             f'{safety_line}\n'
+            f'{web3_line}'
             f'合约 {p["address"]}\n{p.get("url", "")}\n'
             '这是条件式研究提醒，不自动交易，也不代表100倍概率。')
 
@@ -152,6 +167,20 @@ def enqueue_events(cfg, store, rows, previous, now):
 def cycle(cfg,store,collector=None):
     now=time.time(); collector=collector or Collector(cfg.timeout)
     pairs,statuses=collector.collect(cfg.chains)
+    binance_web3, binance_web3_health = read_binance_web3(cfg.binance_web3_file, pairs, now,
+                                                           cfg.binance_web3_max_age)
+    apply_binance_web3(pairs, binance_web3)
+    if cfg.binance_web3_live and cfg.binance_web3_live_checks:
+        live_health = live_enrich(pairs, cfg.binance_web3_live_checks, cfg.timeout)
+        binance_web3_health = {**binance_web3_health, **live_health,
+                               'file_matched': binance_web3_health.get('matched', 0),
+                               'live_enabled': True}
+    else:
+        binance_web3_health['live_enabled'] = False
+    # Each candidate needs one info and one security query; the setting is a
+    # candidate budget, while the client request budget is doubled.
+    gmgn=GmgnClient(cfg.gmgn_api_key, cfg.gmgn_timeout, cfg.gmgn_max_checks * 2)
+    gmgn_health=gmgn.enrich(pairs, cfg.gmgn_max_checks) if cfg.gmgn_max_checks else {'status':'disabled','requests':0,'errors':0,'enriched':0}
     shared_events,social_health=shared_x_mentions(cfg.public_feed_db,pairs,time.time())
     wallets=wallet_index(cfg.wallet_file)
     pairs=enrich(pairs,wallets,kol_events(cfg.kol_file,now),x_mentions(cfg.x_feed_file,now)+shared_events)
@@ -191,6 +220,11 @@ def cycle(cfg,store,collector=None):
         p['safety_eligible']=result.get('eligible',False)
         p['safety_coverage_status']=result.get('coverage_status','unavailable')
         p['safety_coverage_missing']=result.get('coverage_missing') or result.get('missing') or []
+        web3_blocks, web3_warnings = audit_flags(p)
+        p['safety_blocks'] = list(dict.fromkeys(p['safety_blocks'] + web3_blocks))
+        p['safety_warnings'] = list(dict.fromkeys(p['safety_warnings'] + web3_warnings))
+        if web3_blocks:
+            p['safety_status'] = 'blocked'; p['safety_eligible'] = False
         p['score_meta']=score(p)
         if wallets:
             p['wallet_research']=wallet_evidence(p,wallets,time.time())
@@ -251,9 +285,12 @@ def cycle(cfg,store,collector=None):
     if safety_counts['unknown']:errors.append('safety:unknown:'+str(safety_counts['unknown']))
     if checker.api_errors:errors.append('safety:api_errors:'+str(checker.api_errors))
     if social_health['status'] not in ('ok','disabled'):errors.append('x-monitor:'+social_health['status'])
+    if gmgn_health['status'] not in ('ok','disabled','empty'):errors.append('gmgn:'+str(gmgn_health.get('last_error') or gmgn_health['status']))
+    if binance_web3_health['status'] not in ('ok','disabled','empty'):errors.append('binance_web3:'+binance_web3_health['status'])
     if channels:
         body='Meme雷达 每小时关注排序（样本排名，不代表全链覆盖）\n'+time.strftime('%Y-%m-%d %H:%M UTC',time.gmtime(completed))+'\n'
-        body+='数据状态：'+('数据或安全覆盖不完整' if errors else '本轮接口正常')+'\n\n'
+        body+='数据状态：'+('数据或安全覆盖不完整' if errors else '本轮接口正常')+'\n'
+        body+=f'GMGN只读：{gmgn_health["status"]}，增强 {gmgn_health.get("enriched",0)} 个候选；Binance Web3 Skills：{binance_web3_health["status"]}，匹配 {binance_web3_health.get("matched",0)} 个；均不改变安全阻断结论\n\n'
         body+=f'安全统计：safe {safety_counts["safe"]} / blocked {safety_counts["blocked"]} / unknown {safety_counts["unknown"]} / disabled {safety_counts["disabled"]}\n\n'
         body+='安全覆盖（本轮候选）：'+'；'.join(f'{chain} 字段不全 {v["partial_fields"]} / 无可用检查 {v["unavailable"]}' for chain,v in sorted(coverage.items()))+'\n'
         quality=data_quality(statuses,social_health)
@@ -269,7 +306,7 @@ def cycle(cfg,store,collector=None):
         for channel in channels:store.enqueue(f'{VERSION}:ranking:{int(now//3600)}:{channel}',{'channel':channel,'text':body,'kind':'ranking','instrument_keys':[p['chain']+':'+p['address'] for p in ranked]},completed)
     chains={chain:{'pairs':sum(p['chain']==chain for p in pairs),'candidates':sum(p['chain']==chain for p in rows),'status':'ok' if all(s['status'] in ('ok','empty') for s in statuses if s['chain']==chain) else 'partial'} for chain in cfg.chains}
     with store.db() as d: forward=forward_summary(d)
-    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,'data_quality':data_quality(statuses,social_health),'safety':safety_counts,'blocked_rows':[p for p in assessed if p['safety_status']=='blocked'][:20],
+    report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,'gmgn':gmgn_health,'binance_web3':binance_web3_health,'data_quality':data_quality(statuses,social_health),'safety':safety_counts,'blocked_rows':[p for p in assessed if p['safety_status']=='blocked'][:20],
             'notice':'公开DEX样本候选，不保证为Meme。安全检查来自第三方字段，未自行模拟买卖，不能保证可卖；unknown/disabled/有警告只做观察，不触发积极即时信号。LP锁仓、关联钱包和解锁未验证。X帖子来自共享采集或可选证据文件；提及不代表支持，不增加买入评分。钱包尚未自动跟踪。'}
     report['safety_coverage']=coverage
     report['post_research']={'version':'early-microcap-observe-v1','sample_size':len(representatives),
