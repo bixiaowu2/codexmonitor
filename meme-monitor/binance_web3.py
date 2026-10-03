@@ -31,9 +31,16 @@ def _request(url: str, method: str = "GET", body: dict[str, Any] | None = None,
         "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read(3_000_000))
+            payload = json.loads(response.read(3_000_000))
+        if not isinstance(payload, dict) or payload.get("success") is False or payload.get("code") not in (None, 0, "000000"):
+            raise RuntimeError("upstream_business_error")
+        if not isinstance(payload.get("data"), dict) or not payload["data"]:
+            raise RuntimeError("upstream_data_missing")
+        return payload["data"]
     except urllib.error.HTTPError as exc:
         raise RuntimeError("http_" + str(exc.code)) from None
+    except RuntimeError:
+        raise
     except Exception as exc:
         raise RuntimeError(type(exc).__name__) from None
 
@@ -54,23 +61,35 @@ def live_enrich(pairs: list[dict[str, Any]], max_tokens: int = 4,
         address_value = pair.get("address")
         item = {"chain": chain, "address": address_value, "provider": "binance_web3_skills",
                 "checked_at": time.time()}
-        try:
-            dynamic_url = (WEB3 + "/bapi/defi/v4/public/wallet-direct/buw/wallet/market/"
-                           "token/dynamic/info/ai?chainId=" + urllib.parse.quote(chain_id) +
-                           "&contractAddress=" + urllib.parse.quote(str(address_value)))
-            dynamic = _request(dynamic_url, timeout=timeout); requests += 1
-            audit = _request(WEB3 + "/bapi/defi/v1/public/wallet-direct/security/token/audit",
-                             method="POST", body={"binanceChainId": chain_id,
-                             "contractAddress": address_value, "requestId": str(uuid.uuid4())},
-                             timeout=timeout); requests += 1
-            item["info"] = dynamic.get("data", dynamic) if isinstance(dynamic, dict) else dynamic
-            item["audit"] = audit.get("data", audit) if isinstance(audit, dict) else audit
+        dynamic_url = (WEB3 + "/bapi/defi/v4/public/wallet-direct/buw/wallet/market/"
+                       "token/dynamic/info/ai?chainId=" + urllib.parse.quote(chain_id) +
+                       "&contractAddress=" + urllib.parse.quote(str(address_value)))
+        for kind, url, method, body in (
+            ("info", dynamic_url, "GET", None),
+            ("audit", WEB3 + "/bapi/defi/v1/public/wallet-direct/security/token/audit",
+             "POST", {"binanceChainId": chain_id, "contractAddress": address_value,
+                      "requestId": str(uuid.uuid4())}),
+        ):
+            requests += 1
+            try:
+                result = _request(url, method=method, body=body, timeout=timeout)
+                if kind == "audit" and (result.get("hasResult") is not True or result.get("isSupported") is not True):
+                    raise RuntimeError("audit_unavailable")
+                if kind == "info":
+                    try:
+                        price = float(result.get("price"))
+                    except (TypeError, ValueError):
+                        price = 0
+                    if not 0 < price < float("inf"):
+                        raise RuntimeError("info_price_missing")
+                item[kind] = result
+            except Exception as exc:
+                errors += 1; last_error = str(exc)
+        if "info" in item or "audit" in item:
             pair["binance_web3"] = item
             pair["evidence_sources"] = list(dict.fromkeys((pair.get("evidence_sources") or []) + ["binance_web3_skills"]))
             enriched += 1
-        except Exception as exc:
-            errors += 1; last_error = str(exc)
-    status = "ok" if enriched else ("partial" if errors else "empty")
+    status = "partial" if errors else ("ok" if enriched else "empty")
     return {"status": status, "provider": "binance_web3_skills", "requests": requests,
             "errors": errors, "enriched": enriched, "last_error": last_error,
             "supported_chains": sorted(SUPPORTED_LIVE)}
