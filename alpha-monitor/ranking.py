@@ -46,7 +46,10 @@ def score(o,now):
             'price':price,'quote_time':ts,'stage':stage,'reason':'；'.join(reason),'dual_matched':dual,
             'market':'Alpha＋USDT永续' if dual else '仅Alpha观察池',
             'market_cap':cap,'liquidity':liq,'safety_status':risk.get('status','not_checked'),
-            'unlock_status':risk.get('unlock',{}).get('status','unknown')}
+            'unlock_status':risk.get('unlock',{}).get('status','unknown'),
+            # This has no score impact. It remains provenance for the values
+            # displayed in the focus list, rather than an unvalidated signal.
+            'crypto_market_rank':o.get('crypto_market_rank')}
 
 def rank(observations,now=None,limit=5):
     now=time.time() if now is None else now;unique={}
@@ -74,6 +77,15 @@ def format_message(rows,now=None,coverage=None,previous=None):
                   f'报价{r["price"]:.8g} USDT；市值{r["market_cap"]/1e6:.2f}百万；流动性{r["liquidity"]/1e3:.0f}千美元',
                   security+'；解锁'+('已有披露待复核' if r['unlock_status']!='unknown' else '未知'),
                   '地址 '+r['address']]
+        evidence=r.get('crypto_market_rank') or {}
+        if evidence.get('status')=='ok':
+            pieces=[f'Binance Alpha榜 #{evidence.get("rank")}']
+            if evidence.get('price') is not None: pieces.append(f'榜单价 {evidence["price"]:.8g}')
+            if evidence.get('liquidity') is not None: pieces.append(f'榜单流动性 {evidence["liquidity"]/1e3:.0f}千')
+            if evidence.get('holders_top10_percent') is not None: pieces.append(f'原始Top10 {evidence["holders_top10_percent"]:.1f}%')
+            lines.append('；'.join(pieces)+'；仅交叉数据，不加分且未清洗池/交易所地址。')
+        elif evidence.get('status')=='stale':
+            lines.append('Binance Alpha榜数据已过期，本次不采用。')
     if previous:
         left=[a for a in previous if a not in {r['address'] for r in rows}]
         if left:lines.append(f'上期有{len(left)}个退出榜单，可能因排名或数据变化；退出不等于卖出。')

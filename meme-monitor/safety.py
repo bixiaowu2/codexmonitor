@@ -63,6 +63,55 @@ def unknown(reason, provider='goplus'):
             'coverage_status': 'unavailable'}
 
 
+def merge_gmgn_security(primary, pair):
+    """Apply explicit GMGN hard-risk fields without promoting a token to safe.
+
+    GMGN's `can_sell` is an API assertion, not an on-chain sell simulation.
+    It therefore improves provenance and field coverage only; GoPlus remains
+    the primary eligibility decision unless GMGN reports a hard failure.
+    """
+    out = dict(primary)
+    gmgn = pair.get('gmgn') if isinstance(pair, dict) else None
+    raw = gmgn.get('security') if isinstance(gmgn, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        return out
+    known = {
+        'is_honeypot': raw.get('is_honeypot', raw.get('honeypot')),
+        'cannot_sell_all': raw.get('can_not_sell'),
+        'buy_tax': raw.get('buy_tax'),
+        'sell_tax': raw.get('sell_tax'),
+        'is_open_source': raw.get('is_open_source', raw.get('open_source')),
+        'is_blacklisted': raw.get('is_blacklist', raw.get('blacklist')),
+    }
+    missing = set(out.get('coverage_missing') or out.get('missing') or [])
+    for field, value in known.items():
+        # Tax must be numeric; flag fields require an explicit boolean-like value.
+        valid = fraction(value) is not None if field in ('buy_tax', 'sell_tax') else flag(value) is not None
+        if valid:
+            missing.discard(field)
+    blocks = list(out.get('blocks') or [])
+    warnings = list(out.get('warnings') or [])
+    if flag(known['is_honeypot']) is True:
+        blocks.append('GMGN报告蜜罐风险')
+    if flag(known['cannot_sell_all']) is True:
+        blocks.append('GMGN报告无法完整卖出')
+    if flag(raw.get('can_sell')) is False:
+        warnings.append('GMGN未确认可卖；未做链上卖出模拟')
+    elif flag(raw.get('can_sell')) is True:
+        warnings.append('GMGN报告可卖字段；未做链上卖出模拟')
+    out['blocks'] = list(dict.fromkeys(blocks))
+    out['warnings'] = list(dict.fromkeys(warnings))
+    out['coverage_missing'] = sorted(missing)
+    out['coverage_status'] = 'partial_fields' if missing else 'complete_reported_fields'
+    out['provider'] = str(out.get('provider') or 'goplus') + '+gmgn'
+    out['gmgn_supplemented'] = True
+    # A second vendor's partial response must never turn a previously unknown
+    # result into an immediate-buy eligible result.
+    if out['blocks']:
+        out['status'] = 'blocked'; out['eligible'] = False
+    return out
+
+
 def assess(chain, result):
     if not isinstance(result, dict) or not result:
         return unknown('安全接口缺少有效字段')

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from config import Config
 from net import FetchError
 from radar import cycle, enqueue_events, safety_text, event_text, event_reasons, safety_coverage
-from safety import Checker, assess, top10, EVM_CHAIN_IDS
+from safety import Checker, assess, top10, EVM_CHAIN_IDS, merge_gmgn_security
 from scoring import score
 from sources import Collector
 from storage import Store
@@ -306,6 +306,19 @@ class TestSafety(unittest.TestCase):
             checker.check(pair())
         result=checker.check(pair('0x'+'b'*40))
         self.assertIn('TimeoutError',result['warnings'][0]);self.assertNotIn('限流',result['warnings'][0])
+
+    def test_gmgn_hard_risk_blocks_but_can_sell_never_promotes_unknown(self):
+        primary=assess('arc', {'is_honeypot':'0', 'holders':[]})
+        pair_with_sell={'gmgn':{'security':{'is_honeypot':'0','can_not_sell':'0','can_sell':'1',
+                                             'buy_tax':'0','sell_tax':'0','is_open_source':'1','is_blacklist':'0'}}}
+        merged=merge_gmgn_security(primary,pair_with_sell)
+        self.assertEqual(merged['status'],'unknown')
+        self.assertFalse(merged['eligible'])
+        self.assertTrue(merged['gmgn_supplemented'])
+        self.assertIn('GMGN报告可卖字段；未做链上卖出模拟',merged['warnings'])
+        blocked=merge_gmgn_security(primary,{'gmgn':{'security':{'is_honeypot':'0','can_not_sell':'1'}}})
+        self.assertEqual(blocked['status'],'blocked')
+        self.assertIn('GMGN报告无法完整卖出',blocked['blocks'])
 
 
 if __name__=='__main__': unittest.main()

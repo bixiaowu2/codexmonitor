@@ -6,7 +6,7 @@ from scoring import score
 from sources import Collector,_num
 from storage import Store
 from forward import observe as observe_forward, register as register_forward, summary as forward_summary
-from safety import Checker
+from safety import Checker, merge_gmgn_security
 from wallet_rules import evidence as wallet_evidence, render as wallet_text
 from post_rules import evaluate as post_evidence
 from gmgn import Client as GmgnClient
@@ -27,6 +27,8 @@ def safety_text(p):
     line = '安全：' + labels.get(p.get('safety_status'), '未知，仅观察')
     if p.get('safety_checked_at'):
         line += '；GoPlus ' + time.strftime('%m-%d %H:%M UTC', time.gmtime(p['safety_checked_at']))
+    if p.get('gmgn',{}).get('security'):
+        line += '；GMGN安全字段已交叉（非卖出模拟）'
     if p.get('safety_blocks'):
         line += '；阻断：' + '、'.join(p['safety_blocks'])
     warnings=[w for w in p.get('safety_warnings',[]) if not w.startswith('关键安全字段缺失：')
@@ -212,6 +214,7 @@ def cycle(cfg,store,collector=None):
     rows.sort(key=lambda p:(-p['score_meta']['score'],p['chain'],p['address']))
     for p in rows:
         result=checker.check(p)
+        result=merge_gmgn_security(result,p)
         p['safety_status']=result.get('status','unknown')
         p['safety_blocks']=result.get('blocks') or []
         p['safety_warnings']=result.get('warnings') or []

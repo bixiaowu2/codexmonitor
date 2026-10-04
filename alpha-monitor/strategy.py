@@ -6,6 +6,7 @@ from radar import ALPHA,TOKENS,FUTURES,PublicAPI,candles,num,ratio,utc,dump,univ
 from safety import inspect,unlock_override,entity_evidence
 from positions import VERSION,initialize,emit,open_positions,position_tick,missing_position,reference_position
 from quotes import get_quote,valid
+from binance_rank import fetch as fetch_market_rank, attach as attach_market_rank
 
 HOUR=3600000
 
@@ -99,6 +100,10 @@ def scan(args,store,daily=None):
         dump(base/'strategy-directory.json',{'observed':now,'tokens':byaddr})
     except Exception:
         byaddr={};errors.append({'stage':'directory','error':'unavailable'})
+    # Binance Web3's Alpha board is useful cross-market evidence only when its
+    # chain/address identity is exact. It never supplies a position quote.
+    rank_snapshot,rank_health=fetch_market_rank(api, '56')
+    rank_health['matched']=attach_market_rank(list(byaddr.values()),rank_snapshot,now)
     duals={v['address'].lower():v for v in (daily or {}).get('candidates',[]) if v.get('chain_id')=='56'}
     # Official futures directory is required before labelling an asset Alpha-only.
     try:
@@ -208,7 +213,7 @@ def scan(args,store,daily=None):
             new,events=transition(current,fx,q,blocked,now)
             new.update(checked=now,features=fx)
             db.execute('INSERT OR REPLACE INTO strategy_state VALUES(?,?)',(address,json.dumps(new)))
-            observations.append({'address':address,'symbol':t['symbol'],'market':market,'features':fx,'quote':q,'blocks':blocked,'setup':new.get('setup_end'),'invalid':new.get('invalid',False),'safety':risk,'token':{k:t.get(k) for k in ('marketCap','fdv','liquidity')},'dual_matched':address in matched,'setup_seen':new.get('setup_seen'),'retested':new.get('retested',False)})
+            observations.append({'address':address,'symbol':t['symbol'],'market':market,'features':fx,'quote':q,'blocks':blocked,'setup':new.get('setup_end'),'invalid':new.get('invalid',False),'safety':risk,'token':{k:t.get(k) for k in ('marketCap','fdv','liquidity')},'crypto_market_rank':t.get('crypto_market_rank'),'dual_matched':address in matched,'setup_seen':new.get('setup_seen'),'retested':new.get('retested',False)})
             for kind,end,level,reason in events:
                 key=f'{VERSION}:{address}:{kind}:{end}'
                 payload={'kind':kind,'address':address,'symbol':t['symbol'],'quote':q,'features':fx,'level':level,'market':market,'rule_version':VERSION,'as_of':utc(),'safety':risk}
@@ -234,7 +239,7 @@ def scan(args,store,daily=None):
                 if kind in ('breakout','retest') and db.execute('SELECT count(*) FROM paper_tracks WHERE created>?',(now-8*86400,)).fetchone()[0]<20:
                     price=q['price'];db.execute('INSERT OR IGNORE INTO paper_tracks(key,address,symbol,created,entry,last,peak,trough,checked) VALUES(?,?,?,?,?,?,?,?,?)',(key,address,t['symbol'],now,price,price,price,price,now))
     with store.db() as db:evaluation.controls(db,observations,byaddr,now)
-    report={'version':VERSION,'as_of':utc(),'status':'partial' if errors else 'ok','universe_count':len(byaddr),'eligible_count':len(eligible),'checked':len(selected),'quotes_checked':len(required),'positions':len(positions),'skipped':skipped,'errors':errors,'alerts':alerts,'observations':observations,
+    report={'version':VERSION,'as_of':utc(),'status':'partial' if errors else 'ok','universe_count':len(byaddr),'eligible_count':len(eligible),'checked':len(selected),'quotes_checked':len(required),'positions':len(positions),'skipped':skipped,'errors':errors,'crypto_market_rank':rank_health,'alerts':alerts,'observations':observations,
             'notice':'新增小时规则未经样本外验证；行情为采样，不保证即时执行或百倍收益。'}
     dump(base/'strategy-latest.json',report)
     with store.db() as db:
