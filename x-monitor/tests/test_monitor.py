@@ -55,6 +55,21 @@ class StateTests(unittest.TestCase):
             send.assert_called_once_with(tweet('a', 11), self.b)
         self.assertFalse(m.load_state(self.path)['pending'])
 
+    def test_dingtalk_monthly_quota_pauses_only_that_target(self):
+        m.ingest(self.state, 'a', [tweet('a', 10)], self.routes, self.path)
+        m.ingest(self.state, 'a', [tweet('a', 11)], self.routes, self.path)
+        calls = []
+        def quota_exhausted(t, target):
+            calls.append(target.kind)
+            if target == self.b:
+                raise RuntimeError('webhook rejected message, errcode=90030')
+        with patch.object(m, 'send_target', side_effect=quota_exhausted), patch.object(m.time, 'time', return_value=1728000000):
+            self.assertFalse(m.deliver_pending(self.state, self.routes, self.path))
+        target_id = m.target_key(self.b)
+        self.assertEqual(calls, ['wecom', 'dingtalk'])
+        self.assertGreater(self.state['target_backoff'][target_id], 1728000000)
+        self.assertEqual(self.state['pending']['a:11']['next_attempt'], self.state['target_backoff'][target_id])
+
     def test_empty_and_corrupt_state_do_not_reset_baselines(self):
         with self.assertRaises(RuntimeError):
             m.ingest(self.state, 'a', [], self.routes, self.path)

@@ -218,7 +218,7 @@ def scrape_account(page: Page, account: str, max_items: int = 20, navigation_ms:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"seen": {}, "initialized_accounts": [], "pending": {}, "watermarks": {}}
+        return {"seen": {}, "initialized_accounts": [], "pending": {}, "watermarks": {}, "target_backoff": {}}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or not isinstance(data.get("seen"), dict):
@@ -231,15 +231,35 @@ def load_state(path: Path) -> dict[str, Any]:
                                                  if data.get("initialized") and seen])
         data.setdefault("pending", {})
         data.setdefault("watermarks", {})
+        data.setdefault("target_backoff", {})
         if (not isinstance(data["initialized_accounts"], list)
                 or not isinstance(data["pending"], dict)
-                or not isinstance(data["watermarks"], dict)):
+                or not isinstance(data["watermarks"], dict)
+                or not isinstance(data["target_backoff"], dict)):
             raise ValueError("invalid state structure")
         for a in data["initialized_accounts"]:
             data["watermarks"].setdefault(a, max([int(i) for i in data["seen"].get(a, {})] or [0]))
         return data
     except (OSError, ValueError, TypeError) as exc:
         raise RuntimeError("cannot load state; restore a valid backup instead of resetting silently") from exc
+
+
+def dingtalk_quota_backoff_until(now: float | None = None) -> float:
+    """Wait until the next month after DingTalk rejects the monthly quota."""
+    current = datetime.fromtimestamp(time.time() if now is None else now, timezone.utc)
+    year, month = current.year, current.month
+    if month == 12:
+        year, month = year + 1, 1
+    else:
+        month += 1
+    # Allow a buffer after the UTC month boundary before trying the refreshed quota.
+    return datetime(year, month, 1, 8, tzinfo=timezone.utc).timestamp()
+
+
+def target_backoff_until(target: WebhookTarget, error: Exception, now: float | None = None) -> float | None:
+    if target.kind == "dingtalk" and "errcode=90030" in str(error):
+        return dingtalk_quota_backoff_until(now)
+    return None
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
@@ -396,8 +416,14 @@ def ingest(state: dict[str, Any], account: str, tweets: list[Tweet],
 
 
 def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]], path: Path) -> bool:
+    backoff = state.setdefault("target_backoff", {})
+    now = time.time()
+    for target_id, until in list(backoff.items()):
+        if not isinstance(until, (int, float)) or until <= now:
+            backoff.pop(target_id, None)
     for key, item in list(state["pending"].items()):
-        if STOP or item["next_attempt"] > time.time():
+        now = time.time()
+        if STOP or item["next_attempt"] > now:
             continue
         tweet = Tweet(**item["tweet"])
         targets = {target_key(t): t for t in targets_for(tweet.account, routes)}
@@ -406,10 +432,18 @@ def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]
             if target is None:
                 LOG.error("pending target removed from config for %s; retaining message", tweet.url)
                 continue
+            if float(backoff.get(target_id, 0)) > now:
+                continue
             try:
                 send_target(tweet, target)
             except Exception as exc:
-                LOG.error("delivery failed for %s (%s): %s", tweet.url, target.kind, type(exc).__name__)
+                until = target_backoff_until(target, exc, now)
+                if until is not None:
+                    backoff[target_id] = until
+                    LOG.error("delivery paused for %s (%s): DingTalk monthly quota exhausted until %s",
+                              tweet.url, target.kind, datetime.fromtimestamp(until, timezone.utc).isoformat())
+                else:
+                    LOG.error("delivery failed for %s (%s): %s", tweet.url, target.kind, type(exc).__name__)
                 continue
             item["remaining"].remove(target_id)
             save_state(path, state)  # Do not resend acknowledged targets on retry/restart.
@@ -422,7 +456,9 @@ def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]
         if not item["remaining"]:
             del state["pending"][key]
         else:
-            item["next_attempt"] = time.time() + 30
+            paused = [float(backoff[target_id]) for target_id in item["remaining"]
+                      if float(backoff.get(target_id, 0)) > now]
+            item["next_attempt"] = min(paused) if paused else now + 30
         save_state(path, state)
     return not state["pending"]
 
