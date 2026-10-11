@@ -187,13 +187,17 @@ def main():
     header = f'妖币候选 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}'
     cond = (f'条件: Alpha+合约+未上现货, 持仓≥{min_oi/1e6:.0f}M, 清洗Top10≥{min_top10*100:.0f}%\n'
             f'分级: S(≥60%)触发启动/回撤信号, A(50-60%)观察, B(40-50%)仅记录')
-    if matches:
+    sa = [r for r in matches if r.get('tier') in ('S', 'A')]
+    if sa:
         body_lines = [header, cond,
                       '妖币候选排序(按大户集中度, 优先检闹赛雇):']
-        for i, r in enumerate(matches, 1):
+        for i, r in enumerate(sa, 1):
             body_lines.append(f"{i}. [{r.get('tier','?')}] {r['symbol']}  清洗Top10 {r['cleaned_top10']*100:.1f}%  持仓 {r['oi_notional']/1e6:.1f}M")
+        b_only = [r for r in matches if r.get('tier') == 'B']
+        if b_only:
+            body_lines.append(f"(仅记录不推送的B级 {len(b_only)} 个: {', '.join(x['symbol'] for x in b_only)})")
     else:
-        body_lines = [header, cond, '当前无命中']
+        body_lines = [header, cond, '当前无 S/A 级命中']
     full = '\n'.join(body_lines)
     print(full)
 
