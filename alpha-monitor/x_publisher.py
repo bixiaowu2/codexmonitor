@@ -117,6 +117,45 @@ def process_queue(limit=1):
 
 # ---------- 内容组装(从雷达数据生成帖子) ----------
 
+def tg_send_photo(path, caption=""):
+    """把配图直接发到 Telegram(sendPhoto), 方便长按保存后发X。"""
+    import urllib.request, uuid
+    env = {}
+    for line in Path("/etc/alpha-radar.env").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat = env.get("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        return False
+    p = Path(path)
+    if not p.exists():
+        return False
+    boundary = uuid.uuid4().hex
+    fields = {"chat_id": chat}
+    if caption:
+        fields["caption"] = caption[:1000]
+    body = b""
+    for k, v in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{p.name}\"\r\n"
+             f"Content-Type: image/png\r\n\r\n").encode()
+    body += p.read_bytes() + b"\r\n"
+    body += (f"--{boundary}--\r\n").encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+        return True
+    except Exception as e:
+        print("发图失败:", str(e)[:100])
+        return False
+
+
 def compose_scan_alpha():
     """筛选类(早间栏目): 钩子帖 + Thread跟帖, 配图 scan.png。"""
     try:
@@ -279,7 +318,11 @@ def main():
                 parts.append(f"【跟帖{i}】\n" + t)
         body = "\n\n".join(parts)
         if tg_send(body):
-            print(f"草稿已推 Telegram({len(drafts)}个栏目), 复制主帖+跟帖到X, 附图片")
+            sent = 0
+            for d in drafts:
+                if d.get("chart") and tg_send_photo(d["chart"], caption=d["label"] + " 配图(发X时附上)"):
+                    sent += 1
+            print(f"草稿已推 Telegram({len(drafts)}个栏目+{sent}张图), 复制主帖+跟帖, 长按存图后发X")
         return
 
     print(__doc__)
