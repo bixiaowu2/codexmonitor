@@ -171,7 +171,12 @@ def main():
     header = f'🌊 Meme S级候选 @ {ts}'
     cond = '条件: BSC/Solana用清洗后大户集中度(≥50%), 其他链用score+安全+聪明钱; S级触发信号'
     if sa:
-        body_lines = [header, cond, 'Meme候选排序(S+A级, 按大户集中度):']
+        n_s = sum(1 for c in cands if c['_tier'] == 'S')
+        n_a = sum(1 for c in cands if c['_tier'] == 'A')
+        n_b = sum(1 for c in cands if c['_tier'] == 'B')
+        body_lines = [header, cond,
+                      f'完整清单: {len(cands)}个候选, 筛出 S={n_s}/A={n_a}/B={n_b}',
+                      'Meme候选排序(S+A级):']
         for i, c in enumerate(sa, 1):
             if c.get('_ct') is not None:
                 body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% score {c['_score']:.0f}")
