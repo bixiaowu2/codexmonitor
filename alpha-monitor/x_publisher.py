@@ -118,7 +118,12 @@ def process_queue(limit=1):
 # ---------- 内容组装(从雷达数据生成帖子) ----------
 
 def compose_scan_alpha():
-    """筛选类: 妖币观察池。"""
+    """筛选类(早间栏目): 钩子帖 + Thread跟帖, 配图 scan.png。"""
+    try:
+        import x_chart
+        x_chart.chart_scan()
+    except Exception:
+        pass
     try:
         m = json.loads(Path('/var/lib/demon-radar/matches.json').read_text())
     except Exception:
@@ -126,45 +131,75 @@ def compose_scan_alpha():
     sa = [x for x in m if x.get('tier') in ('S', 'A')]
     if not sa:
         return None
-    lines = ['🚨 Alpha妖币观察池 | 数据筛选非投资建议',
-             f'{time.strftime("%m-%d", time.gmtime())} S级大户控盘候选:']
-    for x in sa[:3]:
-        lines.append(f"▪ {x['symbol']} 集中度{x['cleaned_top10']*100:.0f}% 持仓{x['oi_notional']/1e6:.1f}M$")
-    lines.append('逻辑: Alpha+合约+未上现货+高控盘, 临近现货窗口期')
-    return '\n'.join(lines)
-
-
-def compose_signal_alpha():
-    """信号类: 从 track_state 读最近触发的信号(有新才发)。"""
-    try:
-        st = json.loads(Path('/var/lib/demon-radar/track_state.json').read_text())
-    except Exception:
-        return None
-    sigs = st.get('recent_signals') or []
-    if not sigs:
-        return None
-    s = sigs[-1]
-    return s.get('text')  # 由 demon-track 写入
+    top = sa[0]
+    # 钩子: 首句反差/结论
+    hook = (f"链上Top10持仓 {top['cleaned_top10']*100:.0f}%——"
+            f"{top['symbol']} 是主力控盘还是即将引爆?\n\n"
+            f"今日Alpha妖币观察池 👇")
+    main_tweet = (hook + "\n\n"
+                  f"🥇 {top['symbol']} 集中度{top['cleaned_top10']*100:.0f}% 持仓{top['oi_notional']/1e6:.1f}M$\n"
+                  + "\n".join(f"🥈 {x['symbol']} 集中度{x['cleaned_top10']*100:.0f}% 持仓{x['oi_notional']/1e6:.1f}M$"
+                               for x in sa[1:3])
+                  + "\n\n筛选: Alpha+合约+未上现货+大户控盘≥60%\n#BinanceAlpha #Crypto")
+    thread2 = ("为什么盯这几个?\n"
+               "▪ 上了币安合约 = 有真实资金博弈\n"
+               "▪ 未上现货 = 现货上市前是资金布局窗口\n"
+               "▪ 清洗LP后的大户集中度 = 主力控盘强度\n\n"
+               "横盘越久, 拉起来越猛。附图为集中度与持仓对比。")
+    return {"main": main_tweet, "thread": [thread2], "chart": "/var/lib/x-publisher/charts/scan.png",
+            "label": "妖币观察池"}
 
 
 def compose_review():
-    """复盘类: 今日基线对比。"""
+    """复盘类(晚间栏目): 谁涨了谁被打回原形。"""
+    try:
+        import x_chart
+        x_chart.chart_review()
+    except Exception:
+        pass
     try:
         b = json.loads(Path('/var/lib/demon-radar/baseline.json').read_text())
         t = json.loads(Path('/var/lib/demon-radar/track_state.json').read_text())
     except Exception:
         return None
-    rows = []
+    ups, downs = [], []
     for m in b.get('matches', [])[:5]:
         sym = m['symbol']
-        oi = t.get('oi_snap', {}).get(sym)
-        oi_s = f"{oi/1e6:.1f}M$" if oi else '?'
-        rows.append(f"▪ {sym} 持仓{oi_s} 集中度{m.get('cleaned_top10',0)*100:.0f}%")
-    lines = ['📊 Alpha雷达日复盘 | 研究记录',
-             f'{time.strftime("%m-%d", time.gmtime())} S级持仓动态:']
-    lines += rows
-    lines.append('高控盘=主力布局, 非买入信号。瀑布有回撤预警。')
-    return '\n'.join(lines)
+        cur = t.get('oi_snap', {}).get(sym) or m.get('oi_notional') or 0
+        base = m.get('oi_notional') or 0
+        if base > 0:
+            chg = (cur / base - 1) * 100
+            if chg >= 5:
+                ups.append(f"🔺 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+            elif chg <= -5:
+                downs.append(f"🔻 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+    if not ups and not downs:
+        return None
+    hook = "今日Alpha雷达复盘: 谁在被主力加仓, 谁在被打回原形? 👇"
+    main_tweet = (hook + "\n\n"
+                  + ("\n".join(ups[:3]) + "\n" if ups else "")
+                  + ("\n".join(downs[:3]) if downs else "")
+                  + "\n\n持仓=资金态度, 不等于价格必涨\n#BinanceAlpha #Crypto")
+    thread2 = ("复盘逻辑:\n"
+               "▪ 持仓上升+价格横盘 = 主力悄悄布局\n"
+               "▪ 持仓暴增+价格急拉 = 已启动, 注意波动\n"
+               "▪ 持仓下降 = 资金撤退, 别接飞刀\n\n"
+               "明日观察池见早帖。")
+    return {"main": main_tweet, "thread": [thread2], "chart": "/var/lib/x-publisher/charts/review.png",
+            "label": "每日复盘"}
+
+
+def draft_today():
+    """生成今日草稿包(只发币安Alpha相关, 栏目化+Thread)。"""
+    drafts = []
+    for fn in (compose_scan_alpha, compose_review):
+        try:
+            text = fn()
+        except Exception:
+            text = None
+        if text:
+            drafts.append(text)
+    return drafts
 
 
 def tg_send(text):
@@ -186,56 +221,6 @@ def tg_send(text):
                                  data=body, headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=15).read()
     return True
-
-
-def compose_meme():
-    """筛选类: meme S+A 级。"""
-    try:
-        m = json.loads(Path("/var/lib/meme-radar/meme_matches.json").read_text())
-    except Exception:
-        return None
-    if not m:
-        return None
-    lines = ["🌊 Meme雷达观察池 | 数据筛选非投资建议",
-             time.strftime("%m-%d", time.gmtime()) + " 高分候选:"]
-    for x in m[:3]:
-        liq = x.get("liquidity_usd") or 0
-        lines.append(f"▪ {x['symbol']}({x.get('chain','?')}) score {x.get('score',0):.0f} 流动性{liq/1000:.0f}K$")
-    lines.append("逻辑: 安全通过+聪明钱+流动性, 早期观察")
-    return "\n".join(lines)
-
-
-def compose_stock():
-    """筛选类: 股票 S 级(分市场)。"""
-    try:
-        m = json.loads(Path("/var/lib/stock-radar/stock_matches.json").read_text())
-    except Exception:
-        return None
-    s_tier = [x for x in m if x.get("tier") == "S"]
-    if not s_tier:
-        return None
-    lines = ["📈 股票雷达观察池 | 大股东控盘筛选",
-             time.strftime("%m-%d", time.gmtime()) + " S级:"]
-    for x in s_tier[:4]:
-        conc = x.get("conc")
-        conc_s = f"{conc:.0f}%" if conc else "?"
-        lines.append(f"▪ {x.get('name','?')}({x.get('symbol','?')}) 大股东{conc_s}")
-    lines.append("逻辑: 内部人+机构高度持仓, 等技术面确认")
-    return "\n".join(lines)
-
-
-def draft_today():
-    """生成今日草稿包(只发币安Alpha相关, 定位为Alpha达人)。"""
-    drafts = []
-    for name, fn in (("妖币观察池", compose_scan_alpha),
-                     ("每日复盘", compose_review)):
-        try:
-            text = fn()
-        except Exception:
-            text = None
-        if text:
-            drafts.append((name, text))
-    return drafts
 
 
 def main():
@@ -284,12 +269,17 @@ def main():
             print("今日无可发内容")
             return
         ts = time.strftime("%m-%d %H:%M UTC", time.gmtime())
-        parts = [f"📝 X发帖草稿 @ {ts}"]
-        for name, text in drafts:
-            parts.append("\n──── " + name + " ────\n" + text)
+        parts = [f"📝 X发帖草稿 @ {ts}(发X时附上图片)"]
+        for d in drafts:
+            parts.append("\n━━━ " + d['label'] + " ━━━")
+            parts.append("【主帖】\n" + d['main'])
+            if d.get('chart'):
+                parts.append("【配图】" + d['chart'])
+            for i, t in enumerate(d.get('thread', []), 1):
+                parts.append(f"【跟帖{i}】\n" + t)
         body = "\n\n".join(parts)
         if tg_send(body):
-            print(f"草稿已推 Telegram({len(drafts)}条), 请复制到X手动发布")
+            print(f"草稿已推 Telegram({len(drafts)}个栏目), 复制主帖+跟帖到X, 附图片")
         return
 
     print(__doc__)
