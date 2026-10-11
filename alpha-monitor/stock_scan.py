@@ -167,7 +167,7 @@ def main():
     pf.write_text(json.dumps(s_tier, ensure_ascii=False))
 
     header = f'📈 股票 S级候选 @ {ts}'
-    cond = '条件: A股大股东集中度(剔除HKSCC/基金)≥30% 且 score≥50; S级触发启动/回撤/止盈'
+    cond = "条件: 大股东控盘≥40% 且 score≥30; A股=akshare十大流通股东(剔除HKSCC/基金), 港股美股=yfinance(内部人+机构); S级触发启动/回撤/止盈/技术面"
     if sa:
         body_lines = [header, cond, '股票候选排序(S+A级):']
         for i, c in enumerate(sa, 1):
