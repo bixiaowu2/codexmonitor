@@ -73,7 +73,17 @@ def fetch_price(api, futs):
         closes = [num(k[4]) for k in kl if isinstance(k, list) and len(k) >= 5 and num(k[4]) and num(k[4]) > 0]
         if not closes:
             return None
-        return {'first': closes[0], 'last': closes[-1], 'peak_3d': max(closes[-72:]) if len(closes) >= 72 else max(closes)}
+        # 3日高点改用小时线最高价: 原先用72个日收盘(实为72天高点), 盘中冲高回落检测严重滞后
+        peak = max(closes[-3:])
+        try:
+            kh = api.get(FUTURES + '/fapi/v1/klines', {'symbol': futs, 'interval': '1h', 'limit': 72})
+            if isinstance(kh, list) and kh:
+                highs = [num(k[2]) for k in kh if isinstance(k, list) and len(k) >= 6 and num(k[2]) and num(k[2]) > 0]
+                if highs:
+                    peak = max(peak, max(highs))
+        except Exception:
+            pass
+        return {'first': closes[0], 'last': closes[-1], 'peak_3d': peak}
     except Exception:
         return None
 
