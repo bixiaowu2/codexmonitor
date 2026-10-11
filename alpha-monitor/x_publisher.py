@@ -225,13 +225,13 @@ def compose_stock():
 
 
 def draft_today():
-    """生成今日草稿包(三类内容一次出)。"""
+    """生成今日草稿包(只发币安Alpha相关, 定位为Alpha达人)。"""
     drafts = []
-    for name, fn in (("筛选-妖币", compose_scan_alpha), ("筛选-meme", compose_meme),
-                     ("筛选-股票", compose_stock), ("复盘-妖币", compose_review)):
+    for name, fn in (("妖币观察池", compose_scan_alpha),
+                     ("每日复盘", compose_review)):
         try:
             text = fn()
-        except Exception as e:
+        except Exception:
             text = None
         if text:
             drafts.append((name, text))
