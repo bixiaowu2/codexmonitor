@@ -14,6 +14,7 @@ from notify import send_channel
 
 sys.path.insert(0, '/opt/akshare-venv/lib/python3.12/site-packages')
 import akshare as ak
+import yfinance as yf
 
 DATA = Path('/var/lib/stock-radar')
 MATCHES = DATA / 'stock_matches.json'
@@ -102,6 +103,28 @@ def big_holder_concentration(symbol):
         return None
 
 
+def yf_concentration(symbol):
+    cache = AK_DIR / (symbol.replace('.','_') + '.json')
+    now = time.time()
+    if cache.exists() and now - cache.stat().st_mtime < 86400*7:
+        try:
+            return json.loads(cache.read_text()).get('conc')
+        except Exception:
+            pass
+    try:
+        t = yf.Ticker(symbol)
+        mh = t.major_holders
+        if mh is None or len(mh)==0:
+            return None
+        # yfinance 新版 major_holders 是单列表(index=标签, Value=值)
+        d = {str(k): v for k, v in mh['Value'].items()}
+        conc = (float(d.get('insidersPercentHeld',0) or 0) + float(d.get('institutionsPercentHeld',0) or 0)) * 100
+        AK_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({'conc': conc, 'ts': now}))
+        return conc
+    except Exception:
+        return None
+
 def main():
     env = dict(os.environ)
     cands = get_candidates()
@@ -111,14 +134,17 @@ def main():
     for c in cands:
         s = c.get('score_meta', {}).get('score', 0) if isinstance(c.get('score_meta'), dict) else 0
         c['_score'] = s
-        c['_conc'] = big_holder_concentration(c.get('symbol', ''))
+        sym = c.get('symbol', '')
+        c['_conc'] = big_holder_concentration(sym)
+        if c['_conc'] is None:
+            c['_conc'] = yf_concentration(sym)
     # 分级: 大股东集中度高(≥30%) 且 score 高 = S; 或 score 极高
     for c in cands:
         s = c['_score']
         conc = c['_conc']
-        if conc is not None and conc >= 40 and s >= 30:
+        if conc is not None and conc >= 30 and s >= 50:
             c['_tier'] = 'S'
-        elif (conc is not None and conc >= 25) or s >= 45:
+        elif (conc is not None and conc >= 20) or s >= 45:
             c['_tier'] = 'A'
         else:
             c['_tier'] = 'B'
@@ -141,7 +167,7 @@ def main():
     pf.write_text(json.dumps(s_tier, ensure_ascii=False))
 
     header = f'📈 股票 S级候选 @ {ts}'
-    cond = '条件: A股大股东集中度(剔除HKSCC/基金)≥40% 且 score≥30; S级触发启动/回撤/止盈'
+    cond = '条件: A股大股东集中度(剔除HKSCC/基金)≥30% 且 score≥50; S级触发启动/回撤/止盈'
     if sa:
         body_lines = [header, cond, '股票候选排序(S+A级):']
         for i, c in enumerate(sa, 1):
