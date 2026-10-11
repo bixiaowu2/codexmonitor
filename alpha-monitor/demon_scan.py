@@ -164,6 +164,7 @@ def main():
         ct = cleaned_top10(raw)
         if ct is not None and ct >= min_top10:
             c['cleaned_top10'] = round(ct, 4)
+            c['tier'] = 'S' if ct >= 0.60 else ('A' if ct >= 0.50 else 'B')
             matches.append(c)
         time.sleep(GOPLUS_DELAY)
 
@@ -184,12 +185,13 @@ def main():
     gone = [s for s in prev if s not in cur]
 
     header = f'妖币候选 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}'
-    cond = f'条件: Alpha+合约+未上现货, 持仓≥{min_oi/1e6:.0f}M, 清洗Top10≥{min_top10*100:.0f}%'
+    cond = (f'条件: Alpha+合约+未上现货, 持仓≥{min_oi/1e6:.0f}M, 清洗Top10≥{min_top10*100:.0f}%\n'
+            f'分级: S(≥60%)触发启动/回撤信号, A(50-60%)观察, B(40-50%)仅记录')
     if matches:
         body_lines = [header, cond,
                       '妖币候选排序(按大户集中度, 优先检闹赛雇):']
         for i, r in enumerate(matches, 1):
-            body_lines.append(f"{i}. {r['symbol']}  清洗Top10 {r['cleaned_top10']*100:.1f}%  持仓 {r['oi_notional']/1e6:.1f}M")
+            body_lines.append(f"{i}. [{r.get('tier','?')}] {r['symbol']}  清洗Top10 {r['cleaned_top10']*100:.1f}%  持仓 {r['oi_notional']/1e6:.1f}M")
     else:
         body_lines = [header, cond, '当前无命中']
     full = '\n'.join(body_lines)

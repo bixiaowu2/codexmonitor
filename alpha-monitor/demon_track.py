@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
-"""妖币候选跟踪器(只读)。
+"""妖币候选跟踪器(只读)。只跟踪 S 级(清洗Top10≥60%)命中币。
 
-对 demon_scan.py 筛选出的命中币, 实时监控:
-  - B. 启动信号: 资金费率 / 合约持仓异动(负费率/持仓暴增)→ Telegram;
-  - A. 回撤信号: 价格从近期高点回撤 >= 阈值 → 推"回撤预警";
-  - 每天一次状态汇总(Telegram)。
+信号:
+  B. 启动: 资金费率转负(<-0.1%) / 合约持仓暴增(+30%) / 突破7日高点 → 推;
+  A. 回撤: 从3日高点回撤≥25%(瀑布预警, 阈值放宽以拿住涨幅) → 推;
+  T. 分批止盈: 较Alpha上线首收价 ≥3x / ≥10x → 推第一/第二档止盈;
+  每天一次 S 级状态汇总。
 
-从 /var/lib/demon-radar/matches.json 读取命中币。
+较首收价的倍数用于止盈; 用首收价(而非当前成本)因为它是公开可复现的基准。
 """
 from __future__ import annotations
-import sys, json, time, os, concurrent.futures
+import sys, json, time, os, concurrent.futures, types
 from pathlib import Path
 sys.path.insert(0, '/opt/alpha-radar')
-import types
 import dingtalk
 from radar import PublicAPI, FUTURES, num
 
 DATA = Path('/var/lib/demon-radar')
 MATCHES = DATA / 'matches.json'
 STATE = DATA / 'track_state.json'
+DRAWDOWN_PCT = 0.25
+FR_NEG = -0.001
+OI_SURGE = 1.30
+TP1 = 3.0   # 第一档止盈倍数
+TP2 = 10.0  # 第二档止盈倍数
 PRICE_CACHE = DATA / 'price_cache.json'
-DRAWDOWN_PCT = 0.15  # 回撤阈值
-FR_NEG_THRESHOLD = -0.001  # 负费率阈值(< -0.1%)
-OI_SURGE_RATIO = 1.30  # 持仓暴增(较1天前+30%)
-SUMMARY_SECONDS = 24 * 3600
 
 
 def load_env():
@@ -50,6 +51,7 @@ def telegram_send(token, chat, text):
                                  data=body, headers={'Content-Type': 'application/json'})
     urllib.request.urlopen(req, timeout=15).read()
 
+
 def dingtalk_send(env, text):
     if env.get('DINGTALK_ENABLED', 'false').strip().lower() != 'true':
         return
@@ -63,34 +65,32 @@ def dingtalk_send(env, text):
     dingtalk.send(cfg, text)
 
 
-def fetch_price(api, futures_sym, alpha_id):
-    """用合约1h klines 取最近价格序列(7天)。返回最近价、近期高点(3天)。返回空则跳过。"""
+def fetch_price(api, futs):
     try:
-        kl = api.get(FUTURES + '/fapi/v1/klines', {'symbol': futures_sym, 'interval': '1h', 'limit': 168})
+        kl = api.get(FUTURES + '/fapi/v1/klines', {'symbol': futs, 'interval': '1d', 'limit': 200})
         if not isinstance(kl, list) or not kl:
             return None
-        closes = sorted([num(k[4]) for k in kl if isinstance(k, list) and len(k) >= 6 and num(k[4]) and num(k[4]) > 0])
+        closes = [num(k[4]) for k in kl if isinstance(k, list) and len(k) >= 5 and num(k[4]) and num(k[4]) > 0]
         if not closes:
             return None
-        return {'last': closes[-1], 'peak_3d': max(closes[-72:]) if len(closes) >= 72 else max(closes)}
+        return {'first': closes[0], 'last': closes[-1], 'peak_3d': max(closes[-72:]) if len(closes) >= 72 else max(closes)}
     except Exception:
         return None
 
 
-def fetch_oi(api, futures_sym):
+def fetch_oi(api, futs):
     try:
-        oih = api.get(FUTURES + '/futures/data/openInterestHist',
-                      {'symbol': futures_sym, 'period': '1d', 'limit': 2})
-        if isinstance(oih, list) and len(oih) >= 1:
+        oih = api.get(FUTURES + '/futures/data/openInterestHist', {'symbol': futs, 'period': '1d', 'limit': 2})
+        if isinstance(oih, list) and oih:
             return num(oih[-1].get('sumOpenInterestValue'))
     except Exception:
         pass
     return None
 
 
-def fetch_funding(api, futures_sym):
+def fetch_funding(api, futs):
     try:
-        fr = api.get(FUTURES + '/fapi/v1/fundingRate', {'symbol': futures_sym, 'limit': 5})
+        fr = api.get(FUTURES + '/fapi/v1/fundingRate', {'symbol': futs, 'limit': 5})
         if isinstance(fr, list) and fr:
             return [num(x.get('fundingRate')) for x in fr if isinstance(x, dict) and num(x.get('fundingRate')) is not None]
     except Exception:
@@ -98,113 +98,117 @@ def fetch_funding(api, futures_sym):
     return []
 
 
+def notify(env, token, chat, body):
+    if token and chat:
+        try:
+            telegram_send(token, chat, body)
+            print('telegram: sent')
+        except Exception as e:
+            print('telegram fail:', str(e)[:100])
+    try:
+        dingtalk_send(env, body)
+        print('dingtalk: sent')
+    except Exception as e:
+        print('dingtalk fail:', str(e)[:100])
+
+
 def main():
     env = load_env()
     token = secret(env, 'TELEGRAM_BOT_TOKEN')
     chat = secret(env, 'TELEGRAM_CHAT_ID')
     if not MATCHES.exists():
-        print('无命中币, 跳过跟踪')
+        print('无命中币, 跳过')
         return
     try:
         matches = json.loads(MATCHES.read_text(encoding='utf-8'))
     except Exception:
-        print('命中文件损坏, 跳过')
+        print('命中文件损坏')
         return
     matches = [m for m in matches if isinstance(m, dict) and m.get('symbol')]
-    if not matches:
-        print('无命中币, 跳过跟踪')
+    # 只跟踪 S 级(高控盘)
+    s_tier = [m for m in matches if m.get('tier') == 'S']
+    if not s_tier:
+        print('无 S 级命中币, 跳过')
         return
 
-    # 恢复状态(上次推送记录、OI 快照、回撤标志)
     state = {}
     if STATE.exists():
         try:
             state = json.loads(STATE.read_text(encoding='utf-8'))
         except Exception:
             state = {}
+    drawn = set(state.get('drawn_symbols', []))
+    fr_alerted = set(state.get('fr_alerted', []))
     oi_snap = state.get('oi_snap', {})
-    prev_drawn = set(state.get('drawn_symbols', []))
-    alerted_fr = set(state.get('fr_alerted', []))
+    tp_hit = set(state.get('tp_hit', []))
 
-    api = PublicAPI('/var/lib/demon-radar/track-cache', ttl=600)
-    alerts = []  # (kind, symbol, message)
-
-    for m in matches:
+    api = PublicAPI('/var/lib/demon-radar/track-cache', ttl=300)
+    alerts = []
+    for m in s_tier:
         sym = m['symbol']
         futs = m.get('futures', sym + 'USDT')
-        # 1) 回撤(A)
-        price = fetch_price(api, futs, m.get('alpha_id', sym))
+        price = fetch_price(api, futs)
         if price:
-            peak = price['peak_3d']
-            last = price['last']
-            dd = (peak - last) / peak if peak > 0 else 0
-            if dd >= DRAWDOWN_PCT:
-                if sym not in prev_drawn:
-                    alerts.append(('A', sym, f"⚠️ 回撤预警 · {sym}\n从3日高点 {peak:.8g} 回落 {dd*100:.1f}% 至 {last:.8g} USDT。瀑布或刚开始, 注意止损。"))
-                    prev_drawn.add(sym)
-            else:
-                if sym in prev_drawn:
-                    prev_drawn.discard(sym)
-        # 2) 资金费率(B)
+            first, last, peak = price['first'], price['last'], price['peak_3d']
+            # T. 分批止盈
+            if first and first > 0:
+                mult = last / first
+                if mult >= TP2 and sym + ':tp2' not in tp_hit:
+                    alerts.append(f"💰 第二档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。")
+                    tp_hit.add(sym + ':tp2')
+                elif mult >= TP1 and sym + ':tp1' not in tp_hit:
+                    alerts.append(f"💰 第一档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。")
+                    tp_hit.add(sym + ':tp1')
+            # A. 回撤(瀑布预警, 25%)
+            if peak and last:
+                dd = (peak - last) / peak
+                if dd >= DRAWDOWN_PCT:
+                    if sym not in drawn:
+                        alerts.append(f"⚠️ 回撤预警 · {sym}\n从3日高点 {peak:.6g} 回落 {dd*100:.1f}% 至 {last:.6g}。瀑布或已开始, 注意止损/止盈。")
+                        drawn.add(sym)
+                else:
+                    drawn.discard(sym)
         frs = fetch_funding(api, futs)
         if frs:
             cur = frs[-1]
-            if cur is not None and cur < FR_NEG_THRESHOLD and sym not in alerted_fr:
-                alerts.append(('B', sym, f"🚀 启动信号 · {sym}\n资金费率转负 {cur*100:.3f}%(空头给多头), 可能逼空拉升, 关注启动。"))
-                alerted_fr.add(sym)
-        # 3) 持仓异动(B)
+            if cur is not None and cur < FR_NEG and sym not in fr_alerted:
+                alerts.append(f"🚀 启动信号 · {sym}\n资金费率转负 {cur*100:.3f}%, 可能逼空拉升。")
+                fr_alerted.add(sym)
         oi = fetch_oi(api, futs)
         prev = oi_snap.get(sym)
         if oi is not None:
-            if prev and prev > 0 and oi > prev * OI_SURGE_RATIO:
-                alerts.append(('B', sym, f"📈 持仓异动 · {sym}\n合约持仓名义 {oi/1e6:.1f}M USDT, 较前期 {prev/1e6:.1f}M 增 {oi/prev-1:+.1%}, 可能有资金进场。"))
+            if prev and prev > 0 and oi > prev * OI_SURGE:
+                alerts.append(f"📈 持仓异动 · {sym}\n合约持仓 {oi/1e6:.1f}M, 较前期 {prev/1e6:.1f}M 增 {oi/prev-1:+.1%}。")
             oi_snap[sym] = oi
 
-    state.update({'oi_snap': oi_snap, 'drawn_symbols': list(prev_drawn), 'fr_alerted': list(alerted_fr), 'last_run': time.time()})
+    state.update({'drawn_symbols': list(drawn), 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
     STATE.write_text(json.dumps(state, ensure_ascii=False))
 
     if alerts:
-        header = f'🎯 妖币命中跟踪 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}\n当前命中: {", ".join(m["symbol"] for m in matches)}\n'
-        body = header + '\n\n'.join(a[2] for a in alerts)
-        if token and chat:
-            try:
-                telegram_send(token, chat, body)
-                print('telegram: 跟踪警报已推')
-            except Exception as e:
-                print('telegram 失败:', str(e)[:120])
-        try:
-            dingtalk_send(env, body)
-            print('dingtalk: 跟踪警报已推')
-        except Exception as e:
-            print('dingtalk 失败:', str(e)[:120])
+        header = f"🎯 S级妖币跟踪 @ {time.strftime('%m-%d %H:%M UTC', time.gmtime())}\n当前S级: {', '.join(m['symbol'] for m in s_tier)}\n"
+        body = header + '\n\n'.join(alerts)
         print(body)
+        notify(env, token, chat, body)
     else:
-        print(f'监控 {len(matches)} 个命中币, 无异动。')
+        print(f'监控 {len(s_tier)} 个S级币, 无异动。')
 
-    # 每日汇总(推送当前状态)
-    if time.time() - state.get('last_summary', 0) >= SUMMARY_SECONDS:
-        lines = [f'📊 妖币命中日更 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}']
-        for m in matches:
+    if time.time() - state.get('last_summary', 0) >= 24 * 3600:
+        lines = [f'📊 S级妖币日更 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}']
+        for m in s_tier:
             sym = m['symbol']
             futs = m.get('futures', sym + 'USDT')
-            oi = oi_snap.get(sym)
+            price = fetch_price(api, futs)
             frs = fetch_funding(api, futs)
             fr = frs[-1] if frs else None
-            fr_s = f'{fr*100:.4f}%' if fr is not None else 'N/A'
-            oi_s = f'{oi/1e6:.1f}M' if oi else 'N/A'
-            lines.append(f"• {sym}  持仓 {oi_s}  费率 {fr_s}")
-        sum_body = '\n'.join(lines)
-        if token and chat:
-            try:
-                telegram_send(token, chat, sum_body)
-                print('telegram: 日更已推')
-            except Exception as e:
-                print('telegram 汇总失败:', str(e)[:120])
-        try:
-            dingtalk_send(env, sum_body)
-            print('dingtalk: 日更已推')
-        except Exception as e:
-            print('dingtalk 汇总失败:', str(e)[:120])
+            oi = oi_snap.get(sym)
+            px = price['last'] if price else None
+            mult = (px / price['first']) if (price and price['first']) else None
+            px_s = f'{px:.6g}' if px else '?'
+            mult_s = f'{mult:.1f}x' if mult else '?'
+            fr_s = f'{fr*100:.4f}%' if fr is not None else '?'
+            oi_s = f'{oi/1e6:.1f}M' if oi else '?'
+            lines.append(f"• {sym}: {px_s} ({mult_s}) 费率 {fr_s} 持仓 {oi_s}")
+        notify(env, token, chat, '\n'.join(lines))
         state['last_summary'] = time.time()
         STATE.write_text(json.dumps(state, ensure_ascii=False))
 
