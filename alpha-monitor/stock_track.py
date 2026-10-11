@@ -62,13 +62,10 @@ def notify(env, body):
 
 def get_matches():
     try:
-        import sqlite3
-        c = sqlite3.connect(str(DATA / 'stock-radar.sqlite'))
-        r = c.execute("SELECT value FROM runtime WHERE key='latest'").fetchone()
-        if not r:
+        f = DATA / 'stock_matches.json'
+        if not f.exists():
             return []
-        d = json.loads(r[0])
-        return d.get('rows', [])
+        return json.loads(f.read_text(encoding='utf-8'))
     except Exception:
         return []
 
@@ -79,12 +76,12 @@ def main():
     if not matches:
         print('无股票候选, 跳过')
         return
+    # 信任 stock_scan 的分级(它已写入 tier/conc 字段)
     for m in matches:
-        s = m.get('score_meta', {}).get('score', 0) if isinstance(m.get('score_meta'), dict) else 0
-        m['_score'] = s
-        m['_tier'] = 'S' if (s >= 60 and m.get('fresh')) else ('A' if s >= 40 else 'B')
-    s_tier = [m for m in matches if m['_tier'] == 'S']
-    sa = [m for m in matches if m['_tier'] in ('S', 'A')]
+        m['_score'] = 0
+        m['_tier'] = m.get('tier', 'B')
+    s_tier = [m for m in matches if m.get('tier') == 'S']
+    sa = [m for m in matches if m.get('tier') in ('S', 'A')]
 
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     drawn = set(state.get('drawn', []))
