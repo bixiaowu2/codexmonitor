@@ -187,10 +187,15 @@ def main():
     header = f'妖币候选 @ {time.strftime("%m-%d %H:%M UTC", time.gmtime())}'
     cond = (f'条件: Alpha+合约+未上现货, 持仓≥{min_oi/1e6:.0f}M, 清洗Top10≥{min_top10*100:.0f}%\n'
             f'分级: S(≥60%)触发启动/回撤信号, A(50-60%)观察, B(40-50%)仅记录')
+    # 完整候选: OI≥5M未上现的典型有清洗集中度的进 matches, S/A/B 是从中筛选
     sa = [r for r in matches if r.get('tier') in ('S', 'A')]
     if sa:
+        n_s = sum(1 for r in matches if r.get('tier') == 'S')
+        n_a = sum(1 for r in matches if r.get('tier') == 'A')
+        n_b = sum(1 for r in matches if r.get('tier') == 'B')
         body_lines = [header, cond,
-                      '妖币候选排序(按大户集中度, 优先检闹赛雇):']
+                      f'完整清单: {len(matches)}个候选(有清洗集中度), 筛出 S={n_s}/A={n_a}/B={n_b}',
+                      '妖币候选排序(按大户集中度):']
         for i, r in enumerate(sa, 1):
             body_lines.append(f"{i}. [{r.get('tier','?')}] {r['symbol']}  清洗Top10 {r['cleaned_top10']*100:.1f}%  持仓 {r['oi_notional']/1e6:.1f}M")
         b_only = [r for r in matches if r.get('tier') == 'B']
@@ -257,13 +262,20 @@ def main():
     else:
         # 未变更但已超过排序推送间隔 → 只发 Telegram 当前排序(保持新鲜度, 不碰钉钉)
         rank_every = num(env.get('DEMON_RANK_EVERY_SECONDS', str(HEARTBEAT_SECONDS))) or HEARTBEAT_SECONDS
-        if token and chat and time.time() - state.get('last_rank_notify', 0) >= rank_every:
+        if time.time() - state.get('last_rank_notify', 0) >= rank_every:
+            body = full if sa else (header + '\n监控正常, 当前无妖币候选。')
+            if token and chat:
+                try:
+                    telegram_send(token, chat, body)
+                    print('telegram: ranking sent')
+                except Exception as e:
+                    print('telegram ranking failed:', str(e)[:120])
             try:
-                telegram_send(token, chat, full if matches else (header + '\n监控正常, 当前无妖币候选。'))
-                state['last_rank_notify'] = time.time()
-                print('telegram: ranking sent')
+                dingtalk_send(env, body)
+                print('dingtalk: ranking sent')
             except Exception as e:
-                print('telegram ranking failed:', str(e)[:120])
+                print('dingtalk ranking failed:', str(e)[:120])
+            state['last_rank_notify'] = time.time()
         else:
             print('无变化, 静默(不推送)')
 
