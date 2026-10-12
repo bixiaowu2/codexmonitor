@@ -131,14 +131,35 @@ def main():
         print(f'监控 {len(s_tier)} 个股票S级候选, 无异动。')
 
     if time.time() - state.get('last_summary', 0) >= 24 * 3600 and sa:
-        lines = [f'📊 股票候选日更 @ {ts}(S+A级)']
+        # 从 stock-radar latest 补 score/价格(matches 里没存)
+        latest_rows = {}
+        try:
+            import sqlite3 as _sq
+            _c = _sq.connect(str(DATA / 'stock-radar.sqlite'))
+            _r = _c.execute("SELECT value FROM runtime WHERE key='latest'").fetchone()
+            if _r:
+                for row in json.loads(_r[0]).get('rows', []):
+                    latest_rows[row.get('symbol')] = row
+        except Exception:
+            pass
+        lines = [f'📊 股票候选日更 @ {ts}(S+A级, 大股东控盘筛选)']
+        any_fresh = False
         for i, m in enumerate(sa, 1):
-            s = m.get('_score', 0)
-            px = m.get('price')
-            px_s = f'{px:.2f}' if px else '?'
-            fresh = ' fresh' if m.get('fresh') else ' (休市)'
-            lines.append(f"{i}. [{m['_tier']}] {m.get('name','?')} ({m.get('symbol','?')}) score {s:.0f} 价 {px_s}{fresh}")
-        notify(env, '\n'.join(lines))
+            row = latest_rows.get(m.get('symbol'), {})
+            score = row.get('score_meta', {}).get('score', 0) if isinstance(row.get('score_meta'), dict) else 0
+            px = row.get('price')
+            fresh = bool(row.get('fresh'))
+            any_fresh = any_fresh or fresh
+            px_s = f"{px:.2f}" if px else '?'
+            conc = m.get('conc')
+            conc_s = f" 大股东{conc:.0f}%" if conc else ''
+            tag = '' if fresh else '(昨收)'
+            lines.append(f"{i}. [{m.get('tier','?')}] {m.get('name','?')} 大股东{conc_s} score {score:.0f} 价 {px_s}{tag}")
+        # 全部休市且无变化 → 没信息量, 不推(省额度); 有 fresh 或刚进 S 级才推
+        if any_fresh or state.get('last_summary', 0) == 0:
+            notify(env, '\n'.join(lines))
+        else:
+            print('全市场休市, 日更跳过(无信息量)')
         state['last_summary'] = time.time()
         STATE.write_text(json.dumps(state, ensure_ascii=False))
 
