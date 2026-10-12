@@ -99,16 +99,56 @@ def cleaned_top10(chain, address):
             if str(h.get('is_contract')) in ('1', 'true'):
                 continue
             vals.append(v)
+        if not vals:
+            return None  # 无有效外部大户数据(全为合约/空), 视作未知而非 0
         s = sum(sorted(vals, reverse=True)[:10])
         return s if s <= 1.0 else None
     except Exception:
         return None
 
 
+def meme_rush_candidates():
+    """币安官方 meme-rush: 待迁移(Finalizing)+已迁移(Migrated), BSC/Solana。
+    自带 holdersTop10Percent(集中度)与 smartMoney/kol/pro/bn 持仓人数, 补 GoPlus 对新币无数据的缺口。"""
+    try:
+        import bn_skills
+    except Exception:
+        return []
+    out = []
+    for chain_name, chain_id in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
+        for rank in (bn_skills.RUSH_FINALIZING, bn_skills.RUSH_MIGRATED):
+            try:
+                rows = bn_skills.meme_rush(chain_id=chain_id, rank_type=rank, limit=30)
+            except Exception:
+                continue
+            for row in rows:
+                try:
+                    pr = bn_skills.to_pair(row, chain_name)
+                except Exception:
+                    pr = None
+                if pr and pr.get('address'):
+                    out.append(pr)
+    # 按聪明钱持仓人数取前 40(避免上百候选淹没; 聪明钱是最有信息量的维度)
+    out.sort(key=lambda x: -(x.get('smart_money_holders', 0) + x.get('kol_holders', 0) + x.get('pro_holders', 0)))
+    return out[:40]
+
+
 def main():
     import os
     env = dict(os.environ)
     cands = get_candidates()
+    # 合并币安官方 meme-rush 候选(自带集中度+聪明钱, 解决 GoPlus 新币无数据)
+    rush = meme_rush_candidates()
+    _seen = {(c.get('chain'), str(c.get('address', '')).lower()) for c in cands}
+    for r in rush:
+        k = (r.get('chain'), str(r.get('address', '')).lower())
+        if k in _seen:
+            continue
+        _seen.add(k)
+        r['score_meta'] = {'score': 0}
+        r['_from_rush'] = True
+        cands.append(r)
+    print(f'候选: meme-radar {len(cands) - len(rush)} + meme-rush 新增, 合计 {len(cands)}')
     if not cands:
         print('无 meme 候选, 跳过')
         return
@@ -117,6 +157,24 @@ def main():
     for c in cands:
         chain = c.get('chain')
         addr = c.get('address')
+        if c.get('_from_rush'):
+            # meme-rush 自带集中度(百分数)与聪明钱持仓人数, 不查 GoPlus
+            top10 = c.get('holders_top10_pct')
+            c['_ct'] = (top10 / 100.0) if top10 is not None else None
+            c['_smart'] = (c.get('smart_money_holders', 0) + c.get('kol_holders', 0)
+                           + c.get('pro_holders', 0) + (c.get('bn_holders', 0) or 0) * 2)
+            c['_score'] = 0
+            liq = c.get('liquidity_usd') or 0
+            ct = c['_ct']
+            smart = c['_smart']
+            # 分级: 聪明钱在场 + 有真实流动性 + 集中度不极端
+            if smart >= 5 and liq >= 30000 and (ct is None or ct <= 0.80):
+                c['_tier'] = 'S'
+            elif smart >= 2 and liq >= 10000:
+                c['_tier'] = 'A'
+            else:
+                c['_tier'] = 'B'
+            continue
         if chain in GOPLUS_CHAIN:
             c['_ct'] = cleaned_top10(chain, addr)
             time.sleep(GOPLUS_DELAY)
@@ -149,14 +207,17 @@ def main():
             else:
                 c['_tier'] = 'B'
     sa = [c for c in cands if c['_tier'] in ('S', 'A')]
-    sa.sort(key=lambda c: (-(c['_ct'] if c.get('_ct') is not None else -1), -(c['_score'] or 0)))
+    sa.sort(key=lambda c: (0 if c['_tier'] == 'S' else 1, -(c['_ct'] if c.get('_ct') is not None else -1), -(c.get('_smart', 0))))
 
     # 保存 matches(S+A 都写, 供 meme_track 跟踪与日更; S 级才触发信号)
     s_tier = [{'symbol': c.get('symbol'), 'chain': c.get('chain'), 'address': c.get('address'),
                'score': c.get('_score', 0),
                'liquidity_usd': c.get('liquidity_usd'),
                'price_usd': c.get('price_usd'),
-               'smart_hits': c.get('smart_wallet_hits', 0), 'tier': c.get('_tier', 'B')}
+               'cleaned_top10': c.get('_ct'),
+               'smart': c.get('_smart', c.get('smart_wallet_hits', 0)),
+               'futures': c.get('futures'),
+               'tier': c.get('_tier', 'B')}
               for c in sa]
     MATCHES.write_text(json.dumps(s_tier, ensure_ascii=False, indent=2))
 
@@ -181,16 +242,22 @@ def main():
         body_lines = [header, cond,
                       f'完整清单: {len(cands)}个候选, 筛出 S={n_s}/A={n_a}/B={n_b}',
                       'Meme候选排序(S+A级):']
-        for i, c in enumerate(sa, 1):
-            if c.get('_ct') is not None:
+        for i, c in enumerate(sa[:10], 1):
+            if c.get('_from_rush'):
+                sm = int(c.get('_smart', 0))
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 聪明钱{sm}人")
+                continue
+            elif c.get('_ct') is not None:
                 body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% score {c['_score']:.0f}")
             else:
                 liq_w = (c.get('liquidity_usd') or 0) / 1000
                 sm = c.get('smart_wallet_hits') or 0
                 body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) score {c['_score']:.0f} 流动性{liq_w:.0f}K 聪明钱{sm}")
+        if len(sa) > 10:
+            body_lines.append(f"(S+A 共 {len(sa)} 个, 以上为前 10)")
         b = [c for c in cands if c['_tier'] == 'B']
         if b:
-            body_lines.append(f"(B级仅记录 {len(b)} 个: {', '.join(x.get('symbol','?') for x in b[:8])})")
+            body_lines.append(f"(B级仅记录 {len(b)} 个)")
     else:
         body_lines = [header, cond, '当前无 S/A 级命中']
     full = '\n'.join(body_lines)
@@ -202,7 +269,8 @@ def main():
     if changed:
         diff = []
         if new:
-            diff.append('新增S级: ' + ', '.join(f"{cur[s]['symbol']}({cur[s]['cleaned_top10']*100:.0f}%)" for s in sorted(new)))
+            diff.append('新增: ' + ', '.join(
+                f"{cur[s]['symbol']}({(cur[s].get('cleaned_top10') or 0)*100:.0f}%)" for s in sorted(new)))
         if gone:
             diff.append('退出: ' + ', '.join(gone))
         body = header + '\n' + '\n'.join(diff)

@@ -81,14 +81,18 @@ def compose_scan():
         chart = x_chart.chart_scan()
     except Exception:
         chart = None
-    lines = ['📊 币安Alpha妖币观察池 · 大户控盘筛选',
-             f'{time.strftime("%m-%d", time.gmtime())} S级候选:']
+    lines = [f'🔍 我扒了全部币安Alpha代币, 只有 {len(sa[:3])} 个同时满足这三个条件',
+             '',
+             '① 已上币安合约  ② 还没上现货  ③ 剔除LP后大户集中度≥60%',
+             '满足意味着: 主力已控盘, 现货上市前是资金布局窗口期。',
+             '',
+             f'{time.strftime("%m-%d", time.gmtime())} 观察池:']
     for x in sa[:3]:
         lines.append(f"• {cashtag(x['symbol'])} 清洗后集中度 {x['cleaned_top10']*100:.0f}% · 合约持仓 {x['oi_notional']/1e6:.1f}M$")
     lines.append('')
     lines.append('筛选逻辑: 已上币安合约 + 未上现货 + 剔除LP后大户集中度≥60%')
     lines.append('点击上方币种可查看实时行情与合约数据。')
-    lines.append('现货上市前是资金布局窗口期。数据筛选, 不构成投资建议。')
+    lines.append('数据筛选, 不构成投资建议。')
     text = '\n'.join(lines)
     imgs = [str(chart)] if chart and Path(chart).exists() else []
     return text, imgs
@@ -121,8 +125,16 @@ def compose_review():
                 downs.append(f"🔻 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
     if not ups and not downs:
         return None, []
-    lines = ['📊 币安Alpha雷达复盘 · 持仓动向',
-             f'{time.strftime("%m-%d", time.gmtime())}:']
+    _up = len(ups)
+    _down = len(downs)
+    if _up and not _down:
+        _hook = f'📈 昨天 {_up} 个Alpha币被悄悄加仓 — 资金在往哪走?'
+    elif _down and not _up:
+        _hook = f'📉 昨天 {_down} 个Alpha币遭资金撤退 — 谁在被抛弃?'
+    else:
+        _hook = f'📊 Alpha雷达复盘: {_up} 个加仓 · {_down} 个撤退'
+    lines = [_hook, '',
+             f'{time.strftime("%m-%d", time.gmtime())} 合约持仓变化:']
     lines += ups[:3] + downs[:3]
     lines.append('')
     lines.append('持仓上升=资金布局, 持仓下降=资金撤退。数据筛选, 不构成投资建议。')
@@ -213,12 +225,56 @@ def post_signals(max_posts=3):
     print(f'本轮发送 {sent} 条信号帖')
 
 
+def compose_smart_money():
+    """聪明钱买入榜(内容向: 钩子 + cashtag + 数据)。来源: 币安官方 trading-signal。"""
+    try:
+        import bn_skills
+    except Exception:
+        return None, []
+    rows = []
+    for chain, cid in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
+        try:
+            for r in bn_skills.smart_money(chain_id=cid, page_size=100):
+                rows.append((chain, r))
+        except Exception:
+            continue
+    buys = [(ch, r) for ch, r in rows if str(r.get('direction', '')).lower() == 'buy']
+    buys.sort(key=lambda x: -(bn_skills.num(x[1].get('smartMoneyCount')) or 0))
+    if not buys:
+        return None, []
+    # 钩子: 用最强的一条做反差开头
+    top = buys[0][1]
+    top_cnt = int(bn_skills.num(top.get('smartMoneyCount')) or 0)
+    lines = [f'🐋 聪明钱刚刚扫货: {top_cnt} 个聪明钱地址同时买入 {cashtag(top.get("ticker"))}',
+             '',
+             '今日链上聪明钱买入榜:']
+    seen = set()
+    for ch, r in buys[:6]:
+        tick = str(r.get('ticker') or '')
+        if not tick or tick.lower() in seen:
+            continue
+        seen.add(tick.lower())
+        cnt = int(bn_skills.num(r.get('smartMoneyCount')) or 0)
+        chg = ''
+        ap = bn_skills.num(r.get('alertPrice'))
+        cp = bn_skills.num(r.get('currentPrice'))
+        if ap and cp and ap > 0:
+            d = (cp / ap - 1) * 100
+            chg = f' (触发后 {d:+.0f}%)'
+        lines.append(f'• {cashtag(tick)} · {cnt} 人买入{chg}')
+    lines += ['',
+              '聪明钱=链上被持续跟踪的专业地址。他们买什么, 往往先于市场热度。',
+              '点击币种可查看实时行情。数据筛选, 不构成投资建议。']
+    return '\n'.join(lines), []
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--scan', action='store_true')
     ap.add_argument('--review', action='store_true')
     ap.add_argument('--test', action='store_true')
     ap.add_argument('--signal', action='store_true', help='消费信号队列发广场')
+    ap.add_argument('--smart-money', action='store_true', help='发聪明钱买入榜')
     ap.add_argument('--text', type=str)
     args = ap.parse_args()
 
@@ -226,6 +282,14 @@ def main():
         print('缺少 BINANCE_SQUARE_OPENAPI_KEY(env 或 /etc/square-post.env)')
         return
 
+    if args.smart_money:
+        text, imgs = compose_smart_money()
+        if not text:
+            print('无聪明钱数据')
+            return
+        code, out = post_text(text)
+        print(out)
+        return
     if args.signal:
         post_signals()
         return
