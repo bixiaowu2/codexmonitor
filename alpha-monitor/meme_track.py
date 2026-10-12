@@ -144,15 +144,15 @@ def main():
         if base and cur_price and base > 0:
             mult = cur_price / base
             if mult >= TP2 and key + ':tp2' not in tp_hit:
-                alerts.append(f"💰 第二档止盈 · {sym} ({chain})\n较发现价 {base:.6g} 已涨 {mult:.1f}x (现价 {cur_price:.6g})。建议再出 1/3。")
+                alerts.append(f"💰 第二档止盈 · {sym} ({chain})\n较发现价 {base:.6g} 已涨 {mult:.1f}x (现价 {cur_price:.6g})。建议再出 1/3。\n合约 {addr}")
                 tp_hit.add(key + ':tp2')
             elif mult >= TP1 and key + ':tp1' not in tp_hit:
-                alerts.append(f"💰 第一档止盈 · {sym} ({chain})\n较发现价 {base:.6g} 已涨 {mult:.1f}x (现价 {cur_price:.6g})。建议出 1/3 锁利润。")
+                alerts.append(f"💰 第一档止盈 · {sym} ({chain})\n较发现价 {base:.6g} 已涨 {mult:.1f}x (现价 {cur_price:.6g})。建议出 1/3 锁利润。\n合约 {addr}")
                 tp_hit.add(key + ':tp1')
         # B 启动(急涨)
         chg24 = (ph or {}).get('chg24h')
         if chg24 is not None and chg24 >= PUMP_1H * 100 and key not in pump_alerted:
-            alerts.append(f"🚀 启动信号 · {sym} ({chain})\n24h 急涨 +{chg24:.1f}%, 可能启动。")
+            alerts.append(f"🚀 启动信号 · {sym} ({chain})\n24h 急涨 +{chg24:.1f}%, 可能启动。\n合约 {addr}")
             pump_alerted.add(key)
         # A 回撤(用 24h 高点近似: 若当前价较 24h 高点跌 25%+)
         # dexscreener 无高点序列, 用"24h涨幅从峰值大幅回落"近似: 若 1h 跌幅大
@@ -161,7 +161,7 @@ def main():
             d = get_json(f'https://api.dexscreener.com/tokens/v1/{chain}/{addr}', 8)
             ch1 = float((d[0].get('priceChange') or {}).get('h1', 0) or 0)
             if ch1 <= -15 and key not in drawn:
-                alerts.append(f"⚠️ 回撤预警 · {sym} ({chain})\n1小时急跌 {ch1:.1f}%, 瀑布或已开始, 注意止损。")
+                alerts.append(f"⚠️ 回撤预警 · {sym} ({chain})\n1小时急跌 {ch1:.1f}%, 瀑布或已开始, 注意止损。\n合约 {addr}")
                 drawn.add(key)
             elif ch1 > -5:
                 drawn.discard(key)
@@ -183,10 +183,10 @@ def main():
     if time.time() - state.get('last_summary', 0) >= 24 * 3600 and sa:
         lines = [f'📊 Meme候选日更 @ {ts}(S+A级)']
         for i, m in enumerate(sa, 1):
-            s = m.get('_score', 0)
+            sc = m.get('score', 0)
             px = m.get('price_usd')
             px_s = f'{px:.6g}' if px else '?'
-            lines.append(f"{i}. [{m['_tier']}] {m.get('symbol','?')} ({m.get('chain','?')}) score {s:.0f} 价 {px_s}")
+            lines.append(f"{i}. [{m.get('tier','?')}] {m.get('symbol','?')} ({m.get('chain','?')}) score {sc:.0f} 价 {px_s}\n   合约 {m.get('address','')}")
         notify(env, token, chat, '\n'.join(lines))
         state['last_summary'] = time.time()
         STATE.write_text(json.dumps(state, ensure_ascii=False))

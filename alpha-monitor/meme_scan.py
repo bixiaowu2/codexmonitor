@@ -250,7 +250,7 @@ def main():
         for i, c in enumerate(sa[:10], 1):
             if c.get('_from_rush'):
                 sm = int(c.get('_smart', 0))
-                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 聪明钱{sm}人")
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 聪明钱{sm}人\n   合约 {c.get('address','')}")
                 continue
             elif c.get('_ct') is not None:
                 body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% score {c['_score']:.0f}")
