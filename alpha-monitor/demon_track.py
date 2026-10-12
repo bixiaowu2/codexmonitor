@@ -154,6 +154,7 @@ def main():
 
     api = PublicAPI('/var/lib/demon-radar/track-cache', ttl=300)
     alerts = []
+    sq_events = []
     for m in s_tier:
         sym = m['symbol']
         futs = m.get('futures', sym + 'USDT')
@@ -164,17 +165,23 @@ def main():
             if first and first > 0:
                 mult = last / first
                 if mult >= TP2 and sym + ':tp2' not in tp_hit:
-                    alerts.append(f"💰 第二档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。")
+                    _msg = f"💰 第二档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。"
+                    alerts.append(_msg)
+                    sq_events.append({"kind": "止盈2", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                     tp_hit.add(sym + ':tp2')
                 elif mult >= TP1 and sym + ':tp1' not in tp_hit:
-                    alerts.append(f"💰 第一档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。")
+                    _msg = f"💰 第一档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。"
+                    alerts.append(_msg)
+                    sq_events.append({"kind": "止盈1", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                     tp_hit.add(sym + ':tp1')
             # A. 回撤(瀑布预警, 25%)
             if peak and last:
                 dd = (peak - last) / peak
                 if dd >= DRAWDOWN_PCT:
                     if sym not in drawn:
-                        alerts.append(f"⚠️ 回撤预警 · {sym}\n从3日高点 {peak:.6g} 回落 {dd*100:.1f}% 至 {last:.6g}。瀑布或已开始, 注意止损/止盈。")
+                        _msg = f"⚠️ 回撤预警 · {sym}\n从3日高点 {peak:.6g} 回落 {dd*100:.1f}% 至 {last:.6g}。瀑布或已开始, 注意止损/止盈。"
+                        alerts.append(_msg)
+                        sq_events.append({"kind": "回撤", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                         drawn.add(sym)
                 else:
                     drawn.discard(sym)
@@ -182,17 +189,25 @@ def main():
         if frs:
             cur = frs[-1]
             if cur is not None and cur < FR_NEG and sym not in fr_alerted:
-                alerts.append(f"🚀 启动信号 · {sym}\n资金费率转负 {cur*100:.3f}%, 可能逼空拉升。")
+                _msg = f"🚀 启动信号 · {sym}\n资金费率转负 {cur*100:.3f}%, 可能逼空拉升。"
+                alerts.append(_msg)
+                sq_events.append({"kind": "启动", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                 fr_alerted.add(sym)
         oi = fetch_oi(api, futs)
         prev = oi_snap.get(sym)
         if oi is not None:
             if prev and prev > 0 and oi > prev * OI_SURGE:
-                alerts.append(f"📈 持仓异动 · {sym}\n合约持仓 {oi/1e6:.1f}M, 较前期 {prev/1e6:.1f}M 增 {oi/prev-1:+.1%}。")
+                _msg = f"📈 持仓异动 · {sym}\n合约持仓 {oi/1e6:.1f}M, 较前期 {prev/1e6:.1f}M 增 {oi/prev-1:+.1%}。"
+                alerts.append(_msg)
+                sq_events.append({"kind": "持仓", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
             oi_snap[sym] = oi
 
     state.update({'drawn_symbols': list(drawn), 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
     STATE.write_text(json.dumps(state, ensure_ascii=False))
+    if sq_events:
+        with (DATA / 'square_queue.jsonl').open('a', encoding='utf-8') as _qf:
+            for _e in sq_events:
+                _qf.write(json.dumps(_e, ensure_ascii=False) + '\n')
 
     if alerts:
         header = f"🎯 S级妖币跟踪 @ {time.strftime('%m-%d %H:%M UTC', time.gmtime())}\n当前S级: {', '.join(m['symbol'] for m in s_tier)}\n"

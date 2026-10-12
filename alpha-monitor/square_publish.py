@@ -131,11 +131,94 @@ def compose_review():
     return text, imgs
 
 
+SIGNAL_STATE = Path('/var/lib/demon-radar/square_posted.json')
+SIGNAL_QUEUE = Path('/var/lib/demon-radar/square_queue.jsonl')
+
+SIGNAL_TITLE = {
+    '启动': '🚀 启动信号',
+    '回撤': '⚠️ 回撤预警',
+    '止盈1': '💰 第一档止盈',
+    '止盈2': '💰 第二档止盈',
+    '持仓': '📈 持仓异动',
+}
+
+
+def compose_signal(ev):
+    """把 demon-track 的信号事件转成广场帖(带 cashtag + 走势图)。"""
+    kind = ev.get('kind', '其他')
+    sym = ev.get('symbol', '')
+    futs = ev.get('futures', sym + 'USDT')
+    title = SIGNAL_TITLE.get(kind, '📊 雷达信号')
+    tag = cashtag(sym)
+    raw = str(ev.get('text', ''))
+    # 去掉内部标题行(第一行), 保留说明部分
+    body = raw.split('\n', 1)[1].strip() if '\n' in raw else raw
+    lines = [f'{title} · {tag}', body, '',
+             '点击上方币种可查看实时行情。数据筛选, 不构成投资建议。']
+    text = '\n'.join([x for x in lines if x is not None])
+    chart = None
+    try:
+        import sys
+        sys.path.insert(0, '/opt/alpha-radar')
+        import x_chart
+        chart = x_chart.chart_signal(sym, futs)
+    except Exception:
+        chart = None
+    imgs = [str(chart)] if chart and Path(chart).exists() else []
+    return text, imgs
+
+
+def post_signals(max_posts=3):
+    """消费信号队列, 每次最多发 max_posts 条。"""
+    if not SIGNAL_QUEUE.exists():
+        print('无信号队列')
+        return
+    try:
+        posted = set(json.loads(SIGNAL_STATE.read_text())) if SIGNAL_STATE.exists() else set()
+    except Exception:
+        posted = set()
+    events = []
+    for line in SIGNAL_QUEUE.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        key = f"{ev.get('kind')}:{ev.get('symbol')}:{int(ev.get('ts', 0))}"
+        if key in posted:
+            continue
+        events.append((key, ev))
+    if not events:
+        print('无新信号')
+        return
+    # 只发最近的(避免积压刷屏)
+    events = events[-max_posts:]
+    sent = 0
+    for key, ev in events:
+        text, imgs = compose_signal(ev)
+        if imgs:
+            code, out = post_image(text, imgs)
+        else:
+            code, out = post_text(text)
+        if 'Success' in out:
+            posted.add(key)
+            sent += 1
+            print(f"[OK] {ev.get('kind')} {ev.get('symbol')}")
+        else:
+            print(f"[FAIL] {ev.get('kind')} {ev.get('symbol')}: {out.strip()[:150]}")
+            break  # 失败就停, 下轮重试
+    SIGNAL_STATE.write_text(json.dumps(sorted(posted), ensure_ascii=False))
+    print(f'本轮发送 {sent} 条信号帖')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--scan', action='store_true')
     ap.add_argument('--review', action='store_true')
     ap.add_argument('--test', action='store_true')
+    ap.add_argument('--signal', action='store_true', help='消费信号队列发广场')
     ap.add_argument('--text', type=str)
     args = ap.parse_args()
 
@@ -143,6 +226,9 @@ def main():
         print('缺少 BINANCE_SQUARE_OPENAPI_KEY(env 或 /etc/square-post.env)')
         return
 
+    if args.signal:
+        post_signals()
+        return
     if args.test:
         code, out = post_text('币安Alpha雷达 · 连接测试 ✅\n后续将日更妖币观察池与复盘。数据筛选, 不构成投资建议。')
         print(out)
