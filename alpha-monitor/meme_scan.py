@@ -167,13 +167,18 @@ def main():
             liq = c.get('liquidity_usd') or 0
             ct = c['_ct']
             smart = c['_smart']
-            # 分级: 聪明钱在场 + 有真实流动性 + 集中度不极端
-            if smart >= 5 and liq >= 30000 and (ct is None or ct <= 0.80):
+            sniper = c.get('holders_sniper_pct') or 0   # 狙击机器人占比: 高则开盘即砸
+            dev = c.get('holders_dev_pct') or 0          # dev 持仓占比: 高则随时可砸
+            # 风险过滤: 狙击手/DEV 占比过高直接降级(不管聪明钱多少)
+            risky = (sniper >= 50) or (dev >= 20)
+            # 分级: 聪明钱在场 + 流动性充足 + 集中度不极端 + 无高砸盘风险
+            if smart >= 5 and liq >= 30000 and (ct is None or ct <= 0.80) and not risky:
                 c['_tier'] = 'S'
-            elif smart >= 2 and liq >= 10000:
+            elif smart >= 2 and liq >= 10000 and not risky:
                 c['_tier'] = 'A'
             else:
                 c['_tier'] = 'B'
+            c['_risky'] = risky
             continue
         if chain in GOPLUS_CHAIN:
             c['_ct'] = cleaned_top10(chain, addr)

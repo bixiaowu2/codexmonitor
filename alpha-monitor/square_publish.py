@@ -52,16 +52,24 @@ def post_image(text, images):
 
 
 def cashtag(symbol):
-    """币安广场 cashtag: $SYMBOL(仅ASCII可识别符号加, 中文/特殊字符跳过)。
-    Write-to-Earn 只有带 cashtag 的帖子才能把读者交易归因给作者。"""
+    """币安广场 cashtag: $SYMBOL(大写标准格式)。
+
+    规则(宁缺毋滥——错误的 cashtag 比没有更糟, 会指向不存在的币):
+      - 非 ASCII(中文/韩文/emoji/Cyrillic 混写) 无法成 cashtag → 原样返回
+      - 含空格/连字符等非字母数字 → 原样返回(不做清洗! 清洗会造出别的符号)
+      - 纯数字 → 原样返回
+      - 合法: 纯字母数字且含字母, 长度 1-15 → 统一大写, 加 $
+    """
     sym = str(symbol or '').strip()
     if not sym or not sym.isascii():
         return sym
-    # 只保留字母数字(部分 symbol 含特殊字符如 KP⚡ 无法成 cashtag)
-    clean = ''.join(ch for ch in sym if ch.isalnum())
-    if not clean or not clean[0].isalpha():
+    if not sym.isalnum():
         return sym
-    return f"${clean}"
+    if not any(c.isalpha() for c in sym):
+        return sym
+    if len(sym) > 15:
+        return sym
+    return '$' + sym.upper()
 
 
 def compose_scan():
@@ -135,7 +143,7 @@ def compose_review():
         _hook = f'📊 Alpha雷达复盘: {_up} 个加仓 · {_down} 个撤退'
     lines = [_hook, '',
              f'{time.strftime("%m-%d", time.gmtime())} 合约持仓变化:']
-    lines += ups[:3] + downs[:3]
+    lines += (ups[:2] + downs[:1])[:3]  # cashtag 上限3
     lines.append('')
     lines.append('持仓上升=资金布局, 持仓下降=资金撤退。数据筛选, 不构成投资建议。')
     text = '\n'.join(lines)
@@ -226,7 +234,8 @@ def post_signals(max_posts=3):
 
 
 def compose_smart_money():
-    """聪明钱买入榜(内容向: 钩子 + cashtag + 数据)。来源: 币安官方 trading-signal。"""
+    """聪明钱买入榜。注意: 币安广场对单帖 cashtag 数量有服务端上限(实测>3会报220095),
+    故全帖最多 3 个 cashtag: 刚触发 top2 + 已兑现 top1。"""
     try:
         import bn_skills
     except Exception:
@@ -235,35 +244,67 @@ def compose_smart_money():
     for chain, cid in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
         try:
             for r in bn_skills.smart_money(chain_id=cid, page_size=100):
-                rows.append((chain, r))
+                rows.append(r)
         except Exception:
             continue
-    buys = [(ch, r) for ch, r in rows if str(r.get('direction', '')).lower() == 'buy']
-    buys.sort(key=lambda x: -(bn_skills.num(x[1].get('smartMoneyCount')) or 0))
+    buys = [r for r in rows if str(r.get('direction', '')).lower() == 'buy']
     if not buys:
         return None, []
-    # 钩子: 用最强的一条做反差开头
-    top = buys[0][1]
-    top_cnt = int(bn_skills.num(top.get('smartMoneyCount')) or 0)
-    lines = [f'🐋 聪明钱刚刚扫货: {top_cnt} 个聪明钱地址同时买入 {cashtag(top.get("ticker"))}',
-             '',
-             '今日链上聪明钱买入榜:']
-    seen = set()
-    for ch, r in buys[:6]:
-        tick = str(r.get('ticker') or '')
-        if not tick or tick.lower() in seen:
-            continue
-        seen.add(tick.lower())
-        cnt = int(bn_skills.num(r.get('smartMoneyCount')) or 0)
-        chg = ''
+
+    def gain(r):
         ap = bn_skills.num(r.get('alertPrice'))
         cp = bn_skills.num(r.get('currentPrice'))
         if ap and cp and ap > 0:
-            d = (cp / ap - 1) * 100
-            chg = f' (触发后 {d:+.0f}%)'
-        lines.append(f'• {cashtag(tick)} · {cnt} 人买入{chg}')
-    lines += ['',
-              '聪明钱=链上被持续跟踪的专业地址。他们买什么, 往往先于市场热度。',
+            return (cp / ap - 1) * 100
+        return None
+
+    def cnt(r):
+        return int(bn_skills.num(r.get('smartMoneyCount')) or 0)
+
+    best = {}
+    for r in buys:
+        t = str(r.get('ticker') or '').strip()
+        if not t:
+            continue
+        k = t.lower()
+        if k not in best or cnt(r) > cnt(best[k]):
+            best[k] = r
+    items = list(best.values())
+
+    fresh, done = [], []
+    for r in items:
+        g = gain(r)
+        if g is None:
+            continue
+        if g >= 25:
+            done.append(r)
+        elif g >= -10:
+            fresh.append(r)
+    fresh.sort(key=lambda r: -cnt(r))
+    done.sort(key=lambda r: -(gain(r) or 0))
+
+    lines = []
+    hook = fresh[0] if fresh else (done[0] if done else (items[0] if items else None))
+    if hook is not None:
+        lines.append(f'🐋 聪明钱刚刚扫货: {cnt(hook)} 个地址同时买入同一个币')
+        lines.append('')
+    used = 0
+    if fresh:
+        lines.append('🟢 刚触发(还没怎么涨, 可重点关注):')
+        for r in fresh[:2]:
+            if used >= 3:
+                break
+            g = gain(r)
+            lines.append(f'• {cashtag(r.get("ticker"))} · {cnt(r)} 人买入 触发后 {g:+.0f}%')
+            used += 1
+        lines.append('')
+    if done and used < 3:
+        lines.append('🔥 已兑现(信号历史战绩):')
+        for r in done[:3 - used]:
+            lines.append(f'• {cashtag(r.get("ticker"))} · {cnt(r)} 人买入 (触发后 {gain(r):+.0f}%)')
+            used += 1
+        lines.append('')
+    lines += ['聪明钱=链上被持续跟踪的专业地址, 他们买什么往往先于市场热度。',
               '点击币种可查看实时行情。数据筛选, 不构成投资建议。']
     return '\n'.join(lines), []
 
