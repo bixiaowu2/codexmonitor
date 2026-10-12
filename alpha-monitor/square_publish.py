@@ -96,7 +96,7 @@ def compose_scan():
              '',
              f'{time.strftime("%m-%d", time.gmtime())} 观察池:']
     for x in sa[:3]:
-        lines.append(f"• {cashtag(x['symbol'])} 清洗后集中度 {x['cleaned_top10']*100:.0f}% · 合约持仓 {x['oi_notional']/1e6:.1f}M$")
+        lines.append(f"• {cashtag(x['symbol'])} 清洗后集中度 {x['cleaned_top10']*100:.0f}% · 合约持仓 {x['oi_notional']/1e6:.1f}M USDT")
     lines.append('')
     lines.append('筛选逻辑: 已上币安合约 + 未上现货 + 剔除LP后大户集中度≥60%')
     lines.append('点击上方币种可查看实时行情与合约数据。')
@@ -128,9 +128,9 @@ def compose_review():
         if base > 0:
             chg = (cur / base - 1) * 100
             if chg >= 5:
-                ups.append(f"🔺 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+                ups.append(f"🔺 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M -> {cur/1e6:.1f}M USDT)")
             elif chg <= -5:
-                downs.append(f"🔻 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+                downs.append(f"🔻 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M -> {cur/1e6:.1f}M USDT)")
     if not ups and not downs:
         return None, []
     _up = len(ups)

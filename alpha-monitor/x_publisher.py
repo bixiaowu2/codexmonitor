@@ -176,8 +176,8 @@ def compose_scan_alpha():
             f"{top['symbol']} 是主力控盘还是即将引爆?\n\n"
             f"今日Alpha妖币观察池 👇")
     main_tweet = (hook + "\n\n"
-                  f"🥇 {top['symbol']} 集中度{top['cleaned_top10']*100:.0f}% 持仓{top['oi_notional']/1e6:.1f}M$\n"
-                  + "\n".join(f"🥈 {x['symbol']} 集中度{x['cleaned_top10']*100:.0f}% 持仓{x['oi_notional']/1e6:.1f}M$"
+                  f"🥇 {top['symbol']} 集中度{top['cleaned_top10']*100:.0f}% 持仓{top['oi_notional']/1e6:.1f}M USDT\n"
+                  + "\n".join(f"🥈 {x['symbol']} 集中度{x['cleaned_top10']*100:.0f}% 持仓{x['oi_notional']/1e6:.1f}M USDT"
                                for x in sa[1:3])
                   + "\n\n筛选: Alpha+合约+未上现货+大户控盘≥60%\n#BinanceAlpha #Crypto")
     thread2 = ("为什么盯这几个?\n"
@@ -209,9 +209,9 @@ def compose_review():
         if base > 0:
             chg = (cur / base - 1) * 100
             if chg >= 5:
-                ups.append(f"🔺 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+                ups.append(f"🔺 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M USDT)")
             elif chg <= -5:
-                downs.append(f"🔻 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M$)")
+                downs.append(f"🔻 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M USDT)")
     if not ups and not downs:
         return None
     hook = "今日Alpha雷达复盘: 谁在被主力加仓, 谁在被打回原形? 👇"
