@@ -151,9 +151,13 @@ def main():
     sa = [c for c in cands if c['_tier'] in ('S', 'A')]
     sa.sort(key=lambda c: (-(c['_ct'] if c.get('_ct') is not None else -1), -(c['_score'] or 0)))
 
-    # 保存 matches(S级, 供 meme_track 用)
+    # 保存 matches(S+A 都写, 供 meme_track 跟踪与日更; S 级才触发信号)
     s_tier = [{'symbol': c.get('symbol'), 'chain': c.get('chain'), 'address': c.get('address'),
-               'score': c['_score'], 'smart_hits': c.get('smart_wallet_hits',0), 'tier': 'S'} for c in sa if c['_tier'] == 'S']
+               'score': c.get('_score', 0),
+               'liquidity_usd': c.get('liquidity_usd'),
+               'price_usd': c.get('price_usd'),
+               'smart_hits': c.get('smart_wallet_hits', 0), 'tier': c.get('_tier', 'B')}
+              for c in sa]
     MATCHES.write_text(json.dumps(s_tier, ensure_ascii=False, indent=2))
 
     ts = time.strftime('%m-%d %H:%M UTC', time.gmtime())

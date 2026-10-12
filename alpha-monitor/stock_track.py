@@ -143,18 +143,36 @@ def main():
         except Exception:
             pass
         lines = [f'📊 股票候选日更 @ {ts}(S+A级, 大股东控盘筛选)']
+
+        def _mkt(sym):
+            sym = sym or ''
+            if sym.endswith('.SS') or sym.endswith('.SZ'):
+                return 'A股'
+            if sym.endswith('.HK'):
+                return '港股'
+            if '.KS' in sym:
+                return '韩股'
+            return '美股'
+
         any_fresh = False
-        for i, m in enumerate(sa, 1):
-            row = latest_rows.get(m.get('symbol'), {})
-            score = row.get('score_meta', {}).get('score', 0) if isinstance(row.get('score_meta'), dict) else 0
-            px = row.get('price')
-            fresh = bool(row.get('fresh'))
-            any_fresh = any_fresh or fresh
-            px_s = f"{px:.2f}" if px else '?'
-            conc = m.get('conc')
-            conc_s = f" 大股东{conc:.0f}%" if conc else ''
-            tag = '' if fresh else '(昨收)'
-            lines.append(f"{i}. [{m.get('tier','?')}] {m.get('name','?')} 大股东{conc_s} score {score:.0f} 价 {px_s}{tag}")
+        for mk in ('A股', '港股', '美股', '韩股'):
+            group = [m for m in sa if _mkt(m.get('symbol')) == mk]
+            if not group:
+                continue
+            n_s = sum(1 for m in group if m.get('tier') == 'S')
+            lines.append(f"── {mk} ({len(group)}只, {n_s}个S级) ──")
+            for m in group:
+                row = latest_rows.get(m.get('symbol'), {})
+                score = row.get('score_meta', {}).get('score', 0) if isinstance(row.get('score_meta'), dict) else 0
+                px = row.get('price')
+                cur = row.get('currency') or ''
+                fresh = bool(row.get('fresh'))
+                any_fresh = any_fresh or fresh
+                px_s = f"{px:.2f}{cur}" if px else '?'
+                conc = m.get('conc')
+                conc_s = f" 大股东{conc:.0f}%" if conc else ''
+                tag = '' if fresh else '(昨收)'
+                lines.append(f"  [{m.get('tier','?')}] {m.get('name','?')} 大股东{conc_s} score {score:.0f} 价 {px_s}{tag}")
         # 全部休市且无变化 → 没信息量, 不推(省额度); 有 fresh 或刚进 S 级才推
         if any_fresh or state.get('last_summary', 0) == 0:
             notify(env, '\n'.join(lines))
