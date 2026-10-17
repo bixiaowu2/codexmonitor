@@ -38,6 +38,10 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("x-monitor")
 STOP = False
+# Drop queued alerts that cannot be delivered within this window (e.g. DingTalk
+# monthly quota exhausted). Alerts are time-sensitive; stale ones must not flood
+# the secondary channel when the quota resets.
+PENDING_MAX_AGE_SECONDS = int(os.getenv("PENDING_MAX_AGE_SECONDS", "21600"))
 
 
 def watchdog_expired(last_progress: float, now: float, timeout_seconds: float) -> bool:
@@ -74,7 +78,7 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def post_json(url: str, payload: dict[str, Any], timeout: int = 15, telegram: bool = False) -> None:
+def post_json(url: str, payload: dict[str, Any], timeout: int = 15, telegram: bool = False, wechat: bool = False) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
@@ -89,6 +93,12 @@ def post_json(url: str, payload: dict[str, Any], timeout: int = 15, telegram: bo
             if telegram:
                 if not isinstance(parsed, dict) or parsed.get("ok") is not True:
                     raise RuntimeError("Telegram rejected message or returned invalid response")
+                return
+            if wechat:
+                # Server Chan returns {"code": 0, "message": "", "data": {...}} on success.
+                if not isinstance(parsed, dict) or parsed.get("code") not in (0, "0"):
+                    code = parsed.get("code") if isinstance(parsed, dict) else "invalid"
+                    raise RuntimeError(f"Server Chan rejected message, code={code}")
                 return
             if not isinstance(parsed, dict) or type(parsed.get("errcode")) is not int:
                 raise RuntimeError("webhook response missing integer errcode")
@@ -150,8 +160,12 @@ def truncate_utf8(text: str, max_bytes: int) -> str:
     return clipped.decode("utf-8", errors="ignore") + "…"
 
 
-# X currently serves both its older tweet cards and a newer timeline layout.
-CARD_SELECTOR = 'article[data-testid="tweet"], [data-timeline-entry][data-href*="/status/"]:not([data-timeline-entry] [data-timeline-entry])'
+# 2026-10-14: X 前端重构, **整个页面的 data-testid 属性被清空**(实测页面现存 data-testid 总数 = 0),
+# 原选择器 article[data-testid="tweet"] / [data-timeline-entry] 双双失效 → 抓取全断。
+# 实测新 DOM: `article` 命中 9(=推文数), `a[href*="/status/"]` 命中 11, `div[dir="auto"].whitespace-pre-wrap` 命中 10。
+# 故改用裸 `article` 作卡片容器; extract_tweet 内部已按 a[href*="/status/"] 取 ID、按
+# div[dir="auto"].whitespace-pre-wrap 取正文, 并把没有 status 链接的条目过滤掉, 所以是稳的。
+CARD_SELECTOR = 'article'
 
 
 def extract_tweet(account: str, article: Any) -> Tweet | None:
@@ -193,7 +207,9 @@ def scrape_account(page: Page, account: str, max_items: int = 20, navigation_ms:
     try:
         page.locator(CARD_SELECTOR).first.wait_for(timeout=cards_ms)
     except PlaywrightTimeoutError:
-        raise RuntimeError(f"no tweet cards found for @{account}; login, rate limit, or selector change may be involved")
+        # 2026-10-14 起 X 重构前端曾让此条全断; 报错文案已按实际原因排序(选择器变化最常见)。
+        raise RuntimeError(f"no tweet cards found for @{account}; selector change most likely "
+                           f"(X removed data-testid), then login, then rate limit")
     found: dict[str, Tweet] = {}
     # Read each viewport before scrolling: X virtualizes timeline cards.
     for _ in range(scrolls):
@@ -286,10 +302,20 @@ def _parse_targets(values: list[Any], where: str) -> list[WebhookTarget]:
             raise RuntimeError(f"{where}[{index}] must be an object")
         kind = str(value.get("type", "")).strip().lower()
         url = str(value.get("url", "")).strip()
+        sendkey = str(value.get("sendkey", "")).strip()
         secret = str(value.get("secret", "")).strip()
         chat_id = str(value.get("chat_id", "")).strip()
-        if kind not in {"wecom", "dingtalk", "telegram"} or not url:
-            raise RuntimeError(f"{where}[{index}] requires type=wecom|dingtalk|telegram and url")
+        if kind not in {"wecom", "dingtalk", "telegram", "wechat"}:
+            raise RuntimeError(f"{where}[{index}] requires type=wecom|dingtalk|telegram|wechat")
+        if kind == "wechat":
+            # sendkey is the SCT2... token.  url is also accepted for symmetry with other kinds.
+            token = sendkey or url
+            if not token:
+                raise RuntimeError(f"{where}[{index}] requires sendkey (or url) for wechat")
+            targets.append(WebhookTarget("wechat", token, secret="", chat_id="", keyword=""))
+            continue
+        if not url:
+            raise RuntimeError(f"{where}[{index}] requires url for {kind}")
         if kind == "telegram" and not chat_id:
             raise RuntimeError(f"{where}[{index}] requires Telegram chat_id")
         keyword = str(value.get("keyword", os.getenv("DINGTALK_KEYWORD", "DT") if kind == "dingtalk" else "")).strip()
@@ -338,6 +364,8 @@ def global_targets() -> list[WebhookTarget]:
         targets.append(WebhookTarget("dingtalk", url, os.getenv("DINGTALK_SECRET", "").strip(), keyword=os.getenv("DINGTALK_KEYWORD", "DT").strip()))
     if (url := os.getenv("WECOM_WEBHOOK", "").strip()):
         targets.append(WebhookTarget("wecom", url))
+    if (sendkey := os.getenv("WECHAT_SENDKEY", "").strip()):
+        targets.append(WebhookTarget("wechat", sendkey))
     return targets
 
 
@@ -361,6 +389,15 @@ def send_target(tweet: Tweet, target: WebhookTarget) -> None:
         post_json(target.url, {"chat_id": target.chat_id, "text": text,
                               "link_preview_options": {"is_disabled": True}}, timeout=10, telegram=True)
         return
+    if target.kind == "wechat":
+        # Server Chan (https://sct.ftqq.com).  The SendKey is opaque; the full URL
+        # is built at delivery time.  WECHAT_API_BASE allows self-hosted alternatives
+        # and is the seam used by unit tests with a local HTTP server.
+        base = os.getenv("WECHAT_API_BASE", "https://sctapi.ftqq.com").strip().rstrip("/") or "https://sctapi.ftqq.com"
+        url = f"{base}/{target.url}.send"
+        desp = f"{tweet.text or '（无文字内容）'}\n\n[打开原帖]({tweet.url})\n\n{tweet.published_at}"
+        post_json(url, {"title": tweet.title, "desp": desp}, timeout=10, wechat=True)
+        return
     if target.kind == "dingtalk":
         url = signed_dingtalk_url(target.url, target.secret)
         keyword = target.keyword or os.getenv("DINGTALK_KEYWORD", "DT").strip()
@@ -377,14 +414,21 @@ def notify(tweet: Tweet, routes: dict[str, list[WebhookTarget]] | None = None) -
     targets = targets_for(tweet.account, routes or {})
     if not targets:
         raise RuntimeError("no webhook configured; no message sent")
-    errors = []
+    # 尽力而为: 任一渠道失败**不再**让整体抛异常。原实现只要有一个渠道失败就 raise,
+    # 而 x-monitor 配了 4 个渠道(Telegram/钉钉/企业微信/Server酱) —— 钉钉月度配额耗尽(90030)
+    # 就导致每次通知都以异常收场, 上游据此判定"投递失败"。返回成功投递的渠道列表。
+    sent, errors = [], []
     for target in targets:
         try:
             send_target(tweet, target)
+            sent.append(target.kind)
         except Exception:
             errors.append(target.kind)
-    if errors:
+    if not sent:
         raise RuntimeError("notification failed for: " + ", ".join(errors))
+    if errors:
+        LOG.warning("some channels failed for @%s: %s (delivered via %s)",
+                    tweet.account, ", ".join(errors), ", ".join(sent))
 
 
 def ingest(state: dict[str, Any], account: str, tweets: list[Tweet],
@@ -392,7 +436,9 @@ def ingest(state: dict[str, Any], account: str, tweets: list[Tweet],
     if not tweets:
         raise RuntimeError("empty scrape cannot initialize an account")
     targets = targets_for(account, routes)
-    if not targets:
+    # 空 targets 只可能来自 routes 里**显式**给的 [](= 只入公共存档, 不推送)。
+    # 没配路由且没有全局 webhook 时, 仍然是配置错误。
+    if not targets and account.lower() not in routes:
         raise RuntimeError(f"no delivery targets for @{account}")
     seen = state["seen"].setdefault(account, {})
     baseline = account not in state["initialized_accounts"]
@@ -423,6 +469,13 @@ def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]
             backoff.pop(target_id, None)
     for key, item in list(state["pending"].items()):
         now = time.time()
+        age = now - item.get("discovered_at", 0)
+        if age > PENDING_MAX_AGE_SECONDS:
+            LOG.warning("dropping stale pending %s (age %.0fs > %ds); remaining=%s",
+                        item.get("tweet", {}).get("url", key), age, PENDING_MAX_AGE_SECONDS, item.get("remaining"))
+            del state["pending"][key]
+            save_state(path, state)
+            continue
         if STOP or item["next_attempt"] > now:
             continue
         tweet = Tweet(**item["tweet"])
@@ -529,6 +582,10 @@ def check_config(accounts: list[str], routes: dict[str, list[WebhookTarget]], pr
         if not targets_for(account, routes):
             problems.append(f"no webhook configured for @{account}")
     for target in [item for values in routes.values() for item in values] + global_targets():
+        # The wechat target stores an opaque Server Chan SendKey, not a URL; the
+        # real URL is built at delivery time, so it is exempt from URL parsing.
+        if target.kind == "wechat":
+            continue
         parsed = urlparse(target.url)
         if (any(token in target.url for token in ("REPLACE_ME", "GROUP_"))
                 or parsed.scheme not in {"http", "https"} or not parsed.hostname):
@@ -597,12 +654,19 @@ def record_scrape_health(state: dict[str, Any], account: str, success: bool,
         message = ("监控恢复：已重新读取该账号页面。" if recovery else
                    f'监控异常：连续三次无法读取该账号页面；分类：{entry.get("error_category","其他抓取异常")}。后台继续重试，同一故障不再重复提醒，恢复后通知。无法据此判断账号是否限制可见；故障期间可能漏帖。')
         notice = Tweet(account, "health", f"https://x.com/{account}", message, datetime.now(timezone.utc).isoformat(), "监控状态")
+        delivered = False
         try:
             notify(notice, routes)
+            delivered = True
         except Exception:
             LOG.error("could not deliver monitoring health notice for @%s", account)
         entry["last_alert"] = time.time()
-        entry["alerted"] = not recovery
+        # 只有真的送出去了才置 alerted。原实现无论成败都置位 → 一次投递失败就"同一故障不再提醒",
+        # 从此永久静默(用户是靠发问才发现, 不是靠告警)。失败时保持 False, 下轮继续尝试。
+        if delivered or recovery:
+            entry["alerted"] = not recovery
+        else:
+            entry["alerted"] = entry.get("alerted", False)
     save_state(path, state)
 
 
@@ -645,7 +709,8 @@ def run() -> int:
     registry = load_accounts(registry_path) if registry_path else {}
     if feed:feed.set_registry(registry)
     if registry and feed is None:raise RuntimeError('X_PUBLIC_FEED_DB is required for extra account scheduling')
-    if any(not targets_for(a,routes) for a in registry):raise RuntimeError('extra account has no notification target')
+    # 显式 [] = 只存档不推送, 是合法配置(语料库用); 完全没目标才算错。
+    if any(a.lower() not in routes and not targets_for(a,routes) for a in registry):raise RuntimeError('extra account has no notification target')
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
@@ -660,6 +725,7 @@ def run() -> int:
         LOG.info("monitor started for %s; interval=%ss; profile=%s", ", ".join(accounts), poll_seconds, profile_dir)
         beat, stop_watchdog = start_progress_watchdog(watchdog_seconds)
         try:
+            crash_counter = 0
             while not STOP:
                 cycle_start = time.monotonic()
                 beat()
@@ -686,6 +752,15 @@ def run() -> int:
                         cycle_ok = False
                         LOG.error("check failed for @%s: %s", account, exc)
                         record_scrape_health(state, account, False, routes, state_path, str(exc))
+                        err_str = str(exc)
+                        if 'Page crashed' in err_str:
+                            crash_counter += 1
+                            if crash_counter >= 5:
+                                LOG.error("crash counter reached %d; exiting for supervisor restart", crash_counter)
+                                import sys
+                                sys.exit(1)
+                        else:
+                            crash_counter = max(0, crash_counter - 1)
                         if feed and account in registry:
                             try: feed.failure(account,type(exc).__name__,registry[account]['interval_seconds'])
                             except Exception: LOG.error('public feed health write failed')

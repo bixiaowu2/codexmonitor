@@ -1,10 +1,8 @@
 # Oracle Ubuntu 24.04 ARM 部署
 
-从 GitHub 克隆本仓库后，先进入 `x-monitor/` 子目录；下文命令均在该目录执行。
-
 目标环境：Ubuntu 24.04.4 LTS，6.17.0-1011-oracle，aarch64。
 
-预设监控账号：`binancezh`、`cz_binance`、`heyibinance`、`binancewallet`；X 上可访问的 CZ 账号是 `cz_binance`（`czbinance` 返回 404）。额外账号清单默认关闭。运行方式为普通 Chromium + Xvfb。默认同时推送 Telegram 和钉钉，企业微信可不配置。
+预设监控账号：`binancezh`、`czbinanceprd`、`heyibinance`，按用户提供的拼写保留，已在普通 Chromium + Xvfb 中读取到三个账号的公开帖子。默认同时推送 Telegram 和钉钉，企业微信可不配置。
 
 ## 推荐：原生 Python + systemd
 
@@ -20,8 +18,7 @@ nano .env
 安装脚本需要 sudo，安装 Python venv、xauth、Chromium 所需系统库及当前架构的 Playwright 浏览器；最后在本机页面执行无网络浏览器启动测试。只有在你的 ARM 服务器执行成功，才算 ARM 运行时验证完成。默认账号已填写，只需编辑消息目标：
 
 ```env
-X_ACCOUNTS=binancezh,cz_binance,heyibinance,binancewallet
-WATCHDOG_SECONDS=900
+X_ACCOUNTS=binancezh,czbinanceprd,heyibinance
 HEADLESS=false
 TELEGRAM_BOT_TOKEN='从BotFather获得的Token'
 TELEGRAM_CHAT_ID='目标群或频道ID'

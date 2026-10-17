@@ -33,7 +33,9 @@ class PublicFeed:
             d.executescript('''CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,payload TEXT);
                 CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY,account TEXT,watched_account TEXT,url TEXT,text TEXT,published REAL,observed REAL);
                 CREATE INDEX IF NOT EXISTS recent_posts ON posts(published);
-                CREATE TABLE IF NOT EXISTS accounts(account TEXT PRIMARY KEY,last_attempt REAL,last_success REAL,next_due REAL,failures INTEGER,error TEXT);''')
+                CREATE TABLE IF NOT EXISTS accounts(account TEXT PRIMARY KEY,last_attempt REAL,last_success REAL,next_due REAL,failures INTEGER,error TEXT);
+                CREATE TABLE IF NOT EXISTS corpus(id TEXT PRIMARY KEY,account TEXT,url TEXT,text TEXT,published REAL,observed REAL);
+                CREATE INDEX IF NOT EXISTS corpus_by_account ON corpus(account,published);''')
         self.path.chmod(0o640)
     @contextlib.contextmanager
     def db(self):
@@ -56,7 +58,10 @@ class PublicFeed:
                 except (ValueError,TypeError):continue
                 if not 0<=now-stamp<=86400:continue
                 cur=d.execute('INSERT OR IGNORE INTO posts VALUES(?,?,?,?,?,?,?)',(m[2],account.lower(),account.lower(),tweet.url,tweet.text[:12000],stamp,now)); count += max(0, cur.rowcount)
+                d.execute('INSERT OR IGNORE INTO corpus VALUES(?,?,?,?,?,?)',(m[2],account.lower(),tweet.url,tweet.text[:12000],stamp,now))
             d.execute('INSERT OR REPLACE INTO accounts VALUES(?,?,?,?,?,?)',(account,now,now,now+interval,0,None))
+            # corpus 是**语料**(学风格用), 不跟着 posts 的 24 小时滚动清理。
+            d.execute('DELETE FROM corpus WHERE published<?',(now-90*86400,))
             d.execute('DELETE FROM posts WHERE published<?',(now-86400,))
             d.execute('DELETE FROM posts WHERE id IN (SELECT id FROM posts ORDER BY published DESC LIMIT -1 OFFSET 20000)')
         return count

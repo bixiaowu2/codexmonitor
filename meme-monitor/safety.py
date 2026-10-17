@@ -66,49 +66,102 @@ def unknown(reason, provider='goplus'):
 def merge_gmgn_security(primary, pair):
     """Apply explicit GMGN hard-risk fields without promoting a token to safe.
 
-    GMGN's `can_sell` is an API assertion, not an on-chain sell simulation.
-    It therefore improves provenance and field coverage only; GoPlus remains
-    the primary eligibility decision unless GMGN reports a hard failure.
+    Two read-only GMGN sources are merged:
+      * `pair['gmgn']['security']` (the /v1/token/security enrichment) and
+      * `pair['gmgn_rank']` (embedded safety fields on /v1/market/rank).
+
+    GoPlus remains the primary decision unless GMGN reports a hard failure, but a
+    coverage gap left by GoPlus (holders, buy/sell tax, honeypot) may be filled by
+    a valid GMGN value. A token becomes eligible for an immediate signal only when
+    every required field is then covered and no block or warning remains.
     """
     out = dict(primary)
     gmgn = pair.get('gmgn') if isinstance(pair, dict) else None
     raw = gmgn.get('security') if isinstance(gmgn, dict) else None
-    if not isinstance(raw, dict) or not raw:
-        return out
-    known = {
-        'is_honeypot': raw.get('is_honeypot', raw.get('honeypot')),
-        'cannot_sell_all': raw.get('can_not_sell'),
-        'buy_tax': raw.get('buy_tax'),
-        'sell_tax': raw.get('sell_tax'),
-        'is_open_source': raw.get('is_open_source', raw.get('open_source')),
-        'is_blacklisted': raw.get('is_blacklist', raw.get('blacklist')),
-    }
-    missing = set(out.get('coverage_missing') or out.get('missing') or [])
-    for field, value in known.items():
-        # Tax must be numeric; flag fields require an explicit boolean-like value.
-        valid = fraction(value) is not None if field in ('buy_tax', 'sell_tax') else flag(value) is not None
-        if valid:
-            missing.discard(field)
+    rank = pair.get('gmgn_rank') if isinstance(pair, dict) else None
+
+    missing = set(out.get('missing') or [])
+    coverage_missing = set(out.get('coverage_missing') or list(missing))
     blocks = list(out.get('blocks') or [])
     warnings = list(out.get('warnings') or [])
-    if flag(known['is_honeypot']) is True:
-        blocks.append('GMGN报告蜜罐风险')
-    if flag(known['cannot_sell_all']) is True:
-        blocks.append('GMGN报告无法完整卖出')
-    if flag(raw.get('can_sell')) is False:
-        warnings.append('GMGN未确认可卖；未做链上卖出模拟')
-    elif flag(raw.get('can_sell')) is True:
-        warnings.append('GMGN报告可卖字段；未做链上卖出模拟')
+
+    # GMGN /v1/token/security provenance.
+    if isinstance(raw, dict) and raw:
+        known = {
+            'is_honeypot': raw.get('is_honeypot', raw.get('honeypot')),
+            'cannot_sell_all': raw.get('can_not_sell'),
+            'buy_tax': raw.get('buy_tax'),
+            'sell_tax': raw.get('sell_tax'),
+            'is_open_source': raw.get('is_open_source', raw.get('open_source')),
+            'is_blacklisted': raw.get('is_blacklist', raw.get('blacklist')),
+        }
+        for field, value in known.items():
+            valid = fraction(value) is not None if field in ('buy_tax', 'sell_tax') else flag(value) is not None
+            if valid:
+                missing.discard(field)
+                coverage_missing.discard(field)
+        if flag(known['is_honeypot']) is True:
+            blocks.append('GMGN报告蜜罐风险')
+        if flag(known['cannot_sell_all']) is True:
+            blocks.append('GMGN报告无法完整卖出')
+        if flag(raw.get('can_sell')) is False:
+            warnings.append('GMGN未确认可卖；未做链上卖出模拟')
+        elif flag(raw.get('can_sell')) is True:
+            warnings.append('GMGN报告可卖字段；未做链上卖出模拟')
+
+    # GMGN /v1/market/rank embedded safety fields.
+    if isinstance(rank, dict) and rank:
+        for field, label in (('sell_tax', '卖出税'), ('buy_tax', '买入税')):
+            value = fraction(rank.get(field))
+            if value is None:
+                continue
+            missing.discard(field)
+            coverage_missing.discard(field)
+            if field == 'sell_tax' and value >= 0.20:
+                blocks.append(f'{label}达到{value:.1%}（GMGN）')
+            elif value >= 0.10:
+                warnings.append(f'{label}达到{value:.1%}（GMGN）')
+        hp = flag(rank.get('is_honeypot'))
+        if hp is True:
+            blocks.append('GMGN报告蜜罐风险')
+        if hp is not None:
+            missing.discard('is_honeypot')
+            coverage_missing.discard('is_honeypot')
+        if flag(rank.get('is_open_source')) is not None:
+            missing.discard('is_open_source')
+            coverage_missing.discard('is_open_source')
+        share = fraction(rank.get('top_10_holder_rate'))
+        if share is not None:
+            coverage_missing.discard('holders')
+            warnings = [w for w in warnings if w != '持仓集中度数据缺失或无效']
+            out['top10_share'] = share
+            if share >= 0.90:
+                blocks.append(f'GMGN报告前十大户持仓集中约{share:.1%}')
+            elif share >= 0.50:
+                warnings.append(f'GMGN报告前十大户持仓集中约{share:.1%}')
+
     out['blocks'] = list(dict.fromkeys(blocks))
     out['warnings'] = list(dict.fromkeys(warnings))
-    out['coverage_missing'] = sorted(missing)
-    out['coverage_status'] = 'partial_fields' if missing else 'complete_reported_fields'
-    out['provider'] = str(out.get('provider') or 'goplus') + '+gmgn'
+    out['missing'] = sorted(missing)
+    out['coverage_missing'] = sorted(coverage_missing)
+    out['coverage_status'] = 'partial_fields' if coverage_missing else 'complete_reported_fields'
+    provider = str(out.get('provider') or 'goplus')
+    out['provider'] = provider if provider.endswith('+gmgn') else provider + '+gmgn'
     out['gmgn_supplemented'] = True
-    # A second vendor's partial response must never turn a previously unknown
-    # result into an immediate-buy eligible result.
-    if out['blocks']:
+
+    # Recompute the decision from the merged view. Eligibility requires full
+    # required-field coverage and no block or warning.
+    # The GMGN can_sell note is a provenance statement (an API assertion, not an
+    # on-chain simulation) and is informational, not a risk.
+    risk_warnings = [w for w in warnings if w != 'GMGN报告可卖字段；未做链上卖出模拟']
+    if blocks:
         out['status'] = 'blocked'; out['eligible'] = False
+    elif missing:
+        out['status'] = 'unknown'; out['eligible'] = False
+    elif risk_warnings:
+        out['status'] = 'safe'; out['eligible'] = False
+    else:
+        out['status'] = 'safe'; out['eligible'] = True
     return out
 
 
@@ -174,6 +227,8 @@ def assess(chain, result):
         warnings.append('持仓集中度数据缺失或无效')
         coverage_missing.append('holders')
     elif share >= .90:
+        # 恢复为 block: 集中度按"低=好"处理(meme 雷达定位为早期动量), 90%+ 属极端控盘,
+        # 单一地址可瞬间砸盘 —— 直接否决。其余硬风险(mintable/hidden_owner)照常 block。
         blocks.append(f'已报告前十大户持仓集中约{share:.1%}（排除已标记池/销毁地址）')
     elif share >= .50:
         warnings.append(f'已报告前十大户持仓集中约{share:.1%}（排除已标记池/销毁地址）')

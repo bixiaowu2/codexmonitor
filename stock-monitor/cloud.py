@@ -10,6 +10,7 @@ def stop(*_):
     global STOP; STOP = True
 
 def deliver_one(cfg, store):
+    return False  # 推送已迁移到 stock_scan/stock_track/stock_ta, 主服务只采集不投递
     now = time.time(); store.cleanup(now)
     enabled = [x for x, on in [('telegram', cfg.telegram_enabled), ('dingtalk', cfg.dingtalk_enabled)] if on]
     with store.db() as d: rows = d.execute("SELECT * FROM outbox WHERE state='pending' AND next_try<=? ORDER BY created LIMIT 20", (now,)).fetchall()
@@ -28,7 +29,14 @@ def main():
     signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
     while not STOP:
         started = time.time()
-        try: print(json.dumps(cycle(cfg, store), ensure_ascii=False), flush=True)
+        try:
+            report = cycle(cfg, store)
+            q = report.get('data_quality', {})
+            summary = {'version': report.get('version'), 'as_of': report.get('as_of'),
+                       'rows': q.get('rows'), 'fresh': q.get('fresh_rows'), 'stale': q.get('stale_rows'),
+                       'source_errors': q.get('source_errors'), 'events': len(report.get('events', [])),
+                       'errors': report.get('errors', [])}
+            print(json.dumps(summary, ensure_ascii=False), flush=True)
         except Exception as e: print('stock_error:' + type(e).__name__, flush=True)
         for _ in range(8):
             if not deliver_one(cfg, store): break

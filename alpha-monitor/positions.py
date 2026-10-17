@@ -96,6 +96,7 @@ def missing_position(db,p,now,diagnostic=None):
     label='参考仓（假定买入，未核实成交）' if p['mode']=='reference' else '实际成本登记仓'
     explanation={'ticker_stale_or_future':'接口返回的成交时间超出新鲜度范围',
                  'ticker_unavailable_or_invalid':'报价请求失败或返回数据无效',
+                 'ticker_stale_no_recent_trade':'代币近期无 1 分钟真实成交，行情冷清',
                  'quote_expired_during_scan':'报价在本轮处理过程中已过期'}.get(reason,'暂无符合新鲜度要求的报价')
     stamp=diagnostic.get('last_quote_time') or (health['last_quote_time'] if health else None)
     age=f'；距最近已知成交时间/保守下界 {max(0,int(now-stamp/1000))} 秒' if stamp else ''

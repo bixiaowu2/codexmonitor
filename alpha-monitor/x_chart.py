@@ -5,6 +5,7 @@
   chart_scan():   今日 Alpha 妖币观察池 TOP3 集中度条形图
   chart_review(): 复盘 S 级持仓/集中度横向对比
   chart_signal(): 信号触发币的近7日价格走势
+  chart_meme():   Meme 观察池聪明钱持仓与集中度
 输出 PNG 到 /var/lib/x-publisher/charts/。
 """
 from __future__ import annotations
@@ -88,6 +89,164 @@ def chart_scan():
     return _save(fig, 'scan.png')
 
 
+def chart_meme():
+    """Meme 观察池: 聪明钱持仓人数 + 清洗后大户集中度 双面板(S=金色/A=蓝色)。"""
+    try:
+        rows = json.loads(Path('/var/lib/meme-radar/meme_matches.json').read_text())
+    except Exception:
+        return None
+    sa = [r for r in rows if r.get('tier') in ('S', 'A')]
+    sa.sort(key=lambda r: (0 if r.get('tier') == 'S' else 1, -(r.get('smart') or 0)))
+    sa = sa[:8]
+    if not sa:
+        return None
+
+    import numpy as np
+    names = [str(r.get('symbol') or '?')[:14] for r in sa]
+    smart = [int(r.get('smart') or 0) for r in sa]
+    conc = [float((r.get('cleaned_top10') or 0) * 100) for r in sa]
+    colors = [GOLD if r.get('tier') == 'S' else BLUE for r in sa]
+    y = np.arange(len(names))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=BG)
+    fig.suptitle('Meme 观察池 · 聪明钱持仓与大户集中度', color=FG, fontsize=14, y=0.98)
+
+    ax1.barh(y, smart, color=colors)
+    ax1.set_yticks(y); ax1.set_yticklabels(names); ax1.invert_yaxis()
+    ax1.set_title('聪明钱持仓人数', color=FG, fontsize=12)
+    _style(ax1)
+    for i, v in enumerate(smart):
+        ax1.text(v, i, f' {v}', va='center', ha='left', color=FG, fontsize=10)
+    ax1.set_xlim(0, (max(smart) or 1) * 1.2)
+
+    ax2.barh(y, conc, color=colors)
+    ax2.set_yticks(y); ax2.set_yticklabels([]); ax2.invert_yaxis()
+    ax2.set_title('清洗后大户集中度 %', color=FG, fontsize=12)
+    _style(ax2)
+    for i, v in enumerate(conc):
+        ax2.text(v, i, f' {v:.0f}%', va='center', ha='left', color=FG, fontsize=10)
+    ax2.set_xlim(0, (max(conc) or 1) * 1.25)
+
+    return _save(fig, 'meme.png')
+
+
+def chart_smart_live(picks=None, top=6):
+    """聪明钱扫货: 各币买入额横向条形(按链分色, 每条标注单位)。
+
+    ⚠️ 数据里 SOL 与 BNB 是**不同计价单位**, 不能直接比大小 ——
+    所以颜色区分链、标签写明单位, 让人一眼看出哪条是哪条。
+    """
+    if picks is None:
+        try:
+            import square_publish as _sp
+            picks = _sp.smart_live_picks()
+        except Exception:
+            return None
+    picks = (picks or [])[:top]
+    if not picks:
+        return None
+
+    import numpy as np
+    syms = [f"{x['sym'][:12]}" for x in picks]
+    amts = [float(x['amt']) for x in picks]
+    units = [x['qsym'] for x in picks]
+    chains = [x['cn'] for x in picks]
+    mcs = [float(x['mc']) for x in picks]
+    ns = [int(x.get('n') or 1) for x in picks]
+
+    # 按链分色(同一链同色), 便于看出单位差异
+    palette = {'SOL': BLUE, 'BSC': GOLD, 'ETH': '#a371f7', 'BASE': '#3fb950'}
+    colors = [palette.get(c, FG) for c in chains]
+
+    y = np.arange(len(syms))[::-1]
+    fig, ax = plt.subplots(figsize=(9, 0.72 * len(syms) + 1.6), facecolor=BG)
+    ax.barh(y, amts, color=colors, height=0.62)
+    ax.set_yticks(y)
+    ax.set_yticklabels(syms, color=FG, fontsize=12)
+    ax.set_xlabel('买入额（各条单位见右侧标注）', color=FG, fontsize=11)
+    ax.set_title('聪明钱刚扫货 · 钱包池最新买入', color=GOLD, fontsize=15, pad=14)
+    _style(ax)
+    ax.grid(axis='x', color=GRID, linewidth=0.6)
+    ax.grid(axis='y', visible=False)
+
+    for yi, amt, u, mc, n in zip(y, amts, units, mcs, ns):
+        ax.text(amt * 1.02, yi, f"{amt:.3g} {u} · {mc/1e6:.2f}M$ · {n}笔",
+                va='center', color=FG, fontsize=10)
+    ax.set_xlim(0, max(amts) * 1.55)
+
+    # 单位不同不能直接比 —— 显式说明, 避免读者误读
+    if len(set(units)) > 1:
+        ax.text(0.99, -0.16, f"注: 混了 {'/'.join(sorted(set(units)))} 两种计价单位，长度不可直接互比",
+                transform=ax.transAxes, ha='right', va='top', color='#8b949e', fontsize=9.5)
+
+    return _save(fig, 'smart_live.png')
+
+
+def chart_smart_money(picks=None, top=8):
+    """聪明钱买入榜: 各币"触发后涨幅"横向条形(绿正红负)。
+
+    ⚠️ 两组语义不同, 不能混着读:
+      刚 = 信号刚出、涨幅还小(还在窗口里)
+      已 = 信号出过之后涨了多少(历史战绩)
+    所以标签里带"刚/已"前缀, 而不是只靠颜色区分。
+    """
+    if picks is None:
+        try:
+            import square_publish as _sp
+            picks = _sp.smart_money_picks()
+        except Exception:
+            return None
+    if not picks:
+        return None
+
+    rows = []
+    for tag, group in (('刚', picks.get('fresh') or []), ('已', picks.get('done') or [])):
+        for r in group:
+            try:
+                g = picks['gain'](r)
+            except Exception:
+                g = None
+            if g is None:
+                continue
+            rows.append((tag, str(r.get('ticker') or '?'), float(g), int(picks['cnt'](r))))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: -x[2])
+    rows = rows[:top]
+
+    import numpy as np
+    labels = [f"{tag} {sym[:10]}" for tag, sym, _, _ in rows]
+    gains = [g for _, _, g, _ in rows]
+    counts = [c for _, _, _, c in rows]
+    colors = [GREEN if g >= 0 else RED for g in gains]
+
+    y = np.arange(len(labels))[::-1]
+    fig, ax = plt.subplots(figsize=(9, 0.68 * len(labels) + 1.8), facecolor=BG)
+    ax.barh(y, gains, color=colors, height=0.6)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, color=FG, fontsize=12)
+    ax.set_xlabel('触发后涨幅 %', color=FG, fontsize=11)
+    ax.set_title('聪明钱买入信号 · 触发后涨幅', color=GOLD, fontsize=15, pad=14)
+    _style(ax)
+    ax.grid(axis='x', color=GRID, linewidth=0.6)
+    ax.grid(axis='y', visible=False)
+    ax.axvline(0, color='#8b949e', linewidth=1.1)      # 零线加粗, 正负才看得清
+
+    # 横轴按**实际数据范围**取, 不做对称 —— 全是正数时对称会白白浪费一半画布
+    lo, hi = min(gains + [0.0]), max(gains + [0.0])
+    span = max(hi - lo, abs(hi), abs(lo)) or 1
+    off = span * 0.02
+    for yi, g, c in zip(y, gains, counts):
+        ax.text(g + (off if g >= 0 else -off), yi, f"{g:+.0f}% · {c}人",
+                va='center', ha='left' if g >= 0 else 'right', color=FG, fontsize=10)
+    ax.set_xlim(lo - span * 0.22, hi + span * 0.30)
+
+    ax.text(0.99, -0.17,
+            '刚 = 信号刚出、涨幅还小（还在窗口里）　已 = 信号出过之后的涨幅（历史战绩）',
+            transform=ax.transAxes, ha='right', va='top', color='#8b949e', fontsize=9.5)
+    return _save(fig, 'smart_money.png')
+
+
 def chart_review():
     """复盘: S级持仓 vs 集中度双指标。"""
     try:
@@ -102,7 +261,7 @@ def chart_review():
     for m in rows:
         sym = m['symbol']
         cur = t.get('oi_snap', {}).get(sym)
-        base = m.get('oi_notional')
+        base = m.get('oi_notional') or m.get('oi')   # 字段名中途改过, 兼容两种
         names.append(sym)
         now_oi.append((cur or 0) / 1e6)
         base_oi.append((base or 0) / 1e6)
@@ -115,9 +274,16 @@ def chart_review():
     ax.barh(y - 0.2, now_oi, height=0.38, color=colors, label='当前持仓')
     ax.set_yticks(y)
     ax.set_yticklabels(names)
-    ax.set_title('Alpha雷达日复盘 · S级合约持仓变化', color=FG, fontsize=14)
+    ax.set_xlabel('合约持仓名义（百万 USDT）', color=FG, fontsize=11)
+    ax.set_title('Alpha雷达日复盘 · S级合约持仓变化', color=GOLD, fontsize=15, pad=14)
     _style(ax)
-    ax.legend(facecolor=BG, edgecolor=GRID, labelcolor=FG)
+    # 柱子的颜色表示**涨跌方向**, 不是"当前持仓"这一种颜色 ——
+    # 原来图例只写"当前持仓(红)", 而实际涨的是绿的, 图例与配色对不上会误导。
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(color='#30363d', label='基线持仓'),
+                       Patch(color=GREEN, label='当前持仓 ↑ 加仓'),
+                       Patch(color=RED, label='当前持仓 ↓ 撤退')],
+              facecolor=BG, edgecolor=GRID, labelcolor=FG, loc='lower right')
     return _save(fig, 'review.png')
 
 

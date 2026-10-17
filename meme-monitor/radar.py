@@ -9,7 +9,7 @@ from forward import observe as observe_forward, register as register_forward, su
 from safety import Checker, merge_gmgn_security
 from wallet_rules import evidence as wallet_evidence, render as wallet_text
 from post_rules import evaluate as post_evidence
-from gmgn import Client as GmgnClient
+from gmgn import Client as GmgnClient, trending_pairs
 from binance_web3 import read as read_binance_web3, apply as apply_binance_web3, live_enrich, audit_flags
 VERSION='meme-v0.5.3'
 
@@ -163,8 +163,41 @@ def enqueue_events(cfg, store, rows, previous, now):
         track_key=f'{VERSION}:event:{kind}:{key}:{int(now//(21600 if kind=="data_gap" else 1800))}'
         for channel in channels:
             store.enqueue(f'{track_key}:{channel}', {'channel': channel, 'text': body, 'kind': kind, 'instrument_keys': [key]}, now)
-        events.append({'kind': kind, 'chain': p['chain'], 'address': p['address'], 'score': s['score'], 'track_key': track_key, 'entry': p.get('price_usd'), 'instrument_key': key, 'market': p['chain'], 'payload': {'score': s, 'reasons': s.get('reasons', []), 'risk': s.get('risk', [])}})
+        events.append({'kind': kind, 'chain': p['chain'], 'address': p['address'], 'score': s['score'], 'track_key': track_key, 'entry': p.get('price_usd'), 'instrument_key': key, 'market': p['chain'], 'payload': {'score': s, 'reasons': s.get('reasons', []), 'risk': s.get('risk', []), 'features': ledger_features(p, s)}})
     return events
+
+def ledger_features(p, s):
+    """登记时把**要验证的自变量**一并存进账本。
+
+    STATE.md 第十二轮第 ② 项: 原 payload 只有 score/reasons/risk,
+    缺集中度/市值/聪明钱数 —— 而"高控盘是利好还是风险"要用的正是集中度。
+    全用 .get(), 缺的就不要这个键, 不改变任何判断逻辑。
+    """
+    f = {
+        'concentration_cleaned': p.get('cleaned_top10'),      # 剔除 LP 后的大户集中度
+        'concentration_official': p.get('holders_top10_pct'),  # 币安官方口径
+        'market_cap': p.get('market_cap'),
+        'fdv': p.get('fdv'),
+        'liquidity_usd': p.get('liquidity_usd'),
+        'volume_1h': p.get('volume_1h'),
+        'pool_created_at': p.get('created_at'),
+        'age_minutes': s.get('age_minutes'),
+        'buy_ratio_1h': s.get('buy_ratio'),
+        'buys_1h': p.get('buys_1h'),
+        'sells_1h': p.get('sells_1h'),
+        'change_1h': p.get('change_1h'),
+        'change_5m': p.get('change_5m'),
+        'smart_wallet_hits': p.get('smart_wallet_hits'),
+        'kol_hits': p.get('kol_hits'),
+        'x_hits': p.get('x_hits'),
+        'x_account_count': p.get('x_account_count'),
+        'safety_status': p.get('safety_status'),
+        'safety_eligible': p.get('safety_eligible'),
+        'dev_holding_percent': p.get('dev_holding_percent'),
+        'source': p.get('source'),
+    }
+    return {k: v for k, v in f.items() if v is not None}
+
 
 def cycle(cfg,store,collector=None):
     now=time.time(); collector=collector or Collector(cfg.timeout)
@@ -183,6 +216,23 @@ def cycle(cfg,store,collector=None):
     # candidate budget, while the client request budget is doubled.
     gmgn=GmgnClient(cfg.gmgn_api_key, cfg.gmgn_timeout, cfg.gmgn_max_checks * 2)
     gmgn_health=gmgn.enrich(pairs, cfg.gmgn_max_checks) if cfg.gmgn_max_checks else {'status':'disabled','requests':0,'errors':0,'enriched':0}
+    # GMGN market-rank trending as an additional discovery source, throttled so it
+    # never hammers the shared API key. Runs after enrich so safety enrichment keeps
+    # priority; trending pairs carry their own safety fields under `gmgn_rank`.
+    gmgn_trend_health={'status':'disabled','pairs':0}
+    if gmgn.enabled:
+        last_trend=store.state('gmgn_trend_last',0) or 0
+        if now-last_trend>=300:
+            trend_client=GmgnClient(cfg.gmgn_api_key, cfg.gmgn_timeout, len(cfg.chains))
+            trend_pairs,gmgn_trend_health=trending_pairs(trend_client, cfg.chains, 10)
+            if trend_pairs:
+                seen={(p['chain'],p['address'],p['pair_address']) for p in pairs}
+                for tp in trend_pairs:
+                    k=(tp['chain'],tp['address'],tp['pair_address'])
+                    if k not in seen:
+                        seen.add(k);pairs.append(tp)
+            store.put('gmgn_trend_last',now)
+    gmgn_health['trending']=gmgn_trend_health
     shared_events,social_health=shared_x_mentions(cfg.public_feed_db,pairs,time.time())
     wallets=wallet_index(cfg.wallet_file)
     pairs=enrich(pairs,wallets,kol_events(cfg.kol_file,now),x_mentions(cfg.x_feed_file,now)+shared_events)
@@ -272,13 +322,15 @@ def cycle(cfg,store,collector=None):
                 instrument=p['chain']+':'+p['address']
                 register_forward(d,'wallet-convergence-observe-v1:'+instrument+':'+str(int(now//86400)),
                                  instrument,instrument,p['chain'],p['price_usd'],
-                                 {'kind':'wallet_observation','wallet_research':p['wallet_research'],'score_bonus':0},now)
+                                 {'kind':'wallet_observation','wallet_research':p['wallet_research'],'score_bonus':0,
+                                  'features':ledger_features(p,p.get('score_meta') or {})},now)
         for p in representatives.values():
             if p['post_research']['observation_eligible']:
                 instrument=p['chain']+':'+p['address']
                 register_forward(d,'early-microcap-observe-v1:'+instrument+':'+str(int(now//86400)),
                                  instrument,instrument,p['chain'],p.get('price_usd'),
-                                 {'kind':'early_microcap_observation','post_research':p['post_research'],'score_bonus':0},now)
+                                 {'kind':'early_microcap_observation','post_research':p['post_research'],'score_bonus':0,
+                                  'features':ledger_features(p,p.get('score_meta') or {})},now)
         for p in pairs:d.execute('INSERT OR REPLACE INTO pairs VALUES(?,?,?)',(p['chain']+':'+p['address']+':'+p['pair_address'],completed,json.dumps(p,ensure_ascii=False)))
         for p in assessed:
             key=f'{VERSION}:{p["chain"]}:{p["address"]}:{int(now//900)}:{p["safety_status"]}'

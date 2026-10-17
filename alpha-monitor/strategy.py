@@ -5,7 +5,7 @@ from pathlib import Path
 from radar import ALPHA,TOKENS,FUTURES,PublicAPI,candles,num,ratio,utc,dump,universe
 from safety import inspect,unlock_override,entity_evidence
 from positions import VERSION,initialize,emit,open_positions,position_tick,missing_position,reference_position
-from quotes import get_quote,valid
+from quotes import get_quote,valid,REASON_NO_RECENT_TRADE
 from binance_rank import fetch as fetch_market_rank, attach as attach_market_rank
 
 HOUR=3600000
@@ -146,7 +146,7 @@ def scan(args,store,daily=None):
     def fetch(item):
         address,alpha=item
         q,diagnostic=get_quote(api.data,alpha,fallback=address in position_addresses)
-        if not q:return address,None,None,'quote_missing_or_stale',diagnostic
+        if not q:return address,None,None,diagnostic.get('reason','quote_unavailable'),diagnostic
         fx=None;error=None
         if address in selected:
             st=states.get(address,{});target=int(time.time()*1000)//HOUR*HOUR-1
@@ -155,14 +155,25 @@ def scan(args,store,daily=None):
                 try:fx=hourly_features(candles(api.data(ALPHA+'/klines',{'symbol':alpha+'USDT','interval':'1h','limit':60})),time.time())
                 except Exception:error='hourly_data_unavailable'
         return address,q,fx,error,diagnostic
-    results={};diagnostics={}
+    # Quote-availability issues: for non-positions we never want a stale ticker or a
+    # real-market cold spell to flip the daily/hourly aggregate to partial.  For tracked
+    # positions a 'no recent trade' is informational, while any other quote issue
+    # (interface failure, stale ticker) remains a real error.
+    QUOTE_ISSUES=('quote_unavailable','quote_missing_or_stale','ticker_stale_or_future',
+                  'ticker_unavailable_or_invalid','ticker_stale_no_recent_trade',REASON_NO_RECENT_TRADE)
+    results={};diagnostics={};info=[]
+    position_addresses_set={p['address'] for p in positions}
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         for address,q,fx,error,diagnostic in pool.map(fetch,required.items()):
             results[address]=(q,fx)
             diagnostics[address]=diagnostic
-            if error:
-                target=skipped if error=='quote_missing_or_stale' and address not in {p['address'] for p in positions} else errors
-                target.append({'address':address,'error':error})
+            if not error:continue
+            if error in QUOTE_ISSUES and address not in position_addresses_set:
+                skipped.append({'address':address,'error':error})
+            elif error==REASON_NO_RECENT_TRADE:
+                info.append({'address':address,'error':error})
+            else:
+                errors.append({'address':address,'error':error})
     # Only fetch risk data for a possible alert or a registered position; bound provider load.
     risk_addresses=set(p['address'] for p in positions)
     for address,(q,fx) in results.items():
@@ -206,6 +217,9 @@ def scan(args,store,daily=None):
             risk=risks.get(address,{'status':'not_checked','flags':[]})
             blocked.extend(risk.get('flags',[]))
             if risk.get('unlock',{}).get('large_unlock_soon'):blocked.append('已录入披露显示7日内解锁≥流通量5%')
+            cr=t.get('crypto_market_rank') or {}
+            lvl=cr.get('audit_risk_level')
+            if (isinstance(lvl,(int,float)) and lvl>=4) or (isinstance(lvl,str) and lvl.strip().upper()=='HIGH'):blocked.append('Binance Web3审计标记高风险')
             if ratio(q['price'],t.get('price')) is None or not .8<=ratio(q['price'],t.get('price'))<=1.2:blocked.append('名录与实时报价偏差超过20%')
             market='Alpha＋USDT永续（符号/报价匹配，非合约地址级证明）' if address in matched else '仅Alpha观察池（未匹配到交易中的USDT永续）'
             row=db.execute('SELECT payload FROM strategy_state WHERE address=?',(address,)).fetchone()
@@ -239,7 +253,7 @@ def scan(args,store,daily=None):
                 if kind in ('breakout','retest') and db.execute('SELECT count(*) FROM paper_tracks WHERE created>?',(now-8*86400,)).fetchone()[0]<20:
                     price=q['price'];db.execute('INSERT OR IGNORE INTO paper_tracks(key,address,symbol,created,entry,last,peak,trough,checked) VALUES(?,?,?,?,?,?,?,?,?)',(key,address,t['symbol'],now,price,price,price,price,now))
     with store.db() as db:evaluation.controls(db,observations,byaddr,now)
-    report={'version':VERSION,'as_of':utc(),'status':'partial' if errors else 'ok','universe_count':len(byaddr),'eligible_count':len(eligible),'checked':len(selected),'quotes_checked':len(required),'positions':len(positions),'skipped':skipped,'errors':errors,'crypto_market_rank':rank_health,'alerts':alerts,'observations':observations,
+    report={'version':VERSION,'as_of':utc(),'status':'partial' if errors else 'ok','info':info,'universe_count':len(byaddr),'eligible_count':len(eligible),'checked':len(selected),'quotes_checked':len(required),'positions':len(positions),'skipped':skipped,'errors':errors,'crypto_market_rank':rank_health,'alerts':alerts,'observations':observations,
             'notice':'新增小时规则未经样本外验证；行情为采样，不保证即时执行或百倍收益。'}
     dump(base/'strategy-latest.json',report)
     with store.db() as db:

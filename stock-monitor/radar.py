@@ -29,6 +29,37 @@ def fmt(row, s):
             f'5分钟成交量基准倍数 {ratio}；{"、".join(s["reasons"])}\n风险：{"；".join(s["risk"])}\n'
             f'行情截至 {quote_time}；公开行情可能延迟。\n这是研究提醒，主题事件尚未自动验证。')
 
+def ledger_features(row, s):
+    """登记时把**要验证的自变量**一并存进账本。
+
+    现状 payload 只有 {score, theme, kind, quote_at, risk}, 连**入场时的当日涨跌幅**都没存 ——
+    而"信号是不是在追高"正要看它。缺了它, 就分不清是入场时机的问题还是评分的问题。
+    全用 .get(), 缺的就不要这个键, 不改变任何判断逻辑。
+    """
+    chg = row.get('change')
+    f = {
+        'change_pct': chg,                       # 入场时当日涨跌幅(%) —— 最关键
+        'volume_ratio': row.get('volume_ratio'),
+        'price': row.get('price'),
+        'currency': row.get('currency'),
+        'cap_usd': row.get('cap_usd'),
+        'theme_weight': row.get('theme_weight'),
+        'fresh': row.get('fresh'),
+        'fresh_reason': row.get('fresh_reason'),
+        'quote_age_seconds': row.get('quote_age_seconds'),
+        'score_total': s.get('score'),
+        'score_stage': s.get('stage'),
+        # 评分各分量(便于以后拆开看哪个分量真有用)
+        'buy_ratio': None,
+        'reason_count': len(s.get('reasons') or []),
+        'risk_count': len(s.get('risk') or []),
+        'hot_flag': 1 if chg is not None and chg >= 12 else 0,      # 过热档
+        'breakout_flag': 1 if (chg is not None and chg >= 3
+                               and (row.get('volume_ratio') or 0) >= 1.5) else 0,
+    }
+    return {k: v for k, v in f.items() if v is not None}
+
+
 def cycle(cfg, store, collector=None, universe=None):
     universe = load_universe(cfg.universe) if universe is None else universe
     rows, statuses = (collector or Collector(cfg.timeout)).collect(universe)
@@ -51,7 +82,7 @@ def cycle(cfg, store, collector=None, universe=None):
             text = ('🚨 股票即时信号' if kind == 'new_hot' else '📈 股票评分跃升') + '\n' + fmt(row, s)
             track_key=f'{VERSION}:event:{kind}:{key}:{int(now//1800)}'
             for ch in channels: store.enqueue(f'{track_key}:{ch}', {'channel': ch, 'text': text}, now)
-            events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_label(row), 'payload': {'score': s, 'theme': row.get('theme'), 'kind': kind, 'quote_at': row.get('quote_at'), 'risk': s.get('risk', [])}})
+            events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_label(row), 'payload': {'score': s, 'theme': row.get('theme'), 'kind': kind, 'quote_at': row.get('quote_at'), 'risk': s.get('risk', []), 'features': ledger_features(row, s)}})
     store.put('scores', current)
     with store.db() as d:
         for row in rows:

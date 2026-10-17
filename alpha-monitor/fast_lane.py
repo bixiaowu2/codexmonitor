@@ -4,7 +4,7 @@ import argparse,concurrent.futures,json,subprocess,time
 from pathlib import Path
 from urllib.parse import urlencode
 import radar,strategy
-from quotes import get_quote,valid
+from quotes import get_quote,valid,REASON_NO_RECENT_TRADE
 from cloud import Store
 from positions import initialize,open_positions,position_tick,missing_position,emit,VERSION
 from alerts import raise_alert,resolve
@@ -107,7 +107,13 @@ def run(store):
             else:
                 detail=dict(diagnostics.get(p['address'],{}))
                 if q:detail['reason']='quote_expired_during_scan'
-                missing_position(db,p,now,detail);errors.append('position_quote_unavailable')
+                missing_position(db,p,now,detail)
+                # Market condition (no recent trades) is not an interface failure: log it
+                # separately so the daily/hourly partial aggregate reflects provider health.
+                if detail.get('reason')==REASON_NO_RECENT_TRADE:
+                    errors.append('position_no_recent_trade')
+                else:
+                    errors.append('position_quote_unavailable')
         for address,(q,fx) in samples.items():
             if q:evaluation.observe(db,address,q,now)
         for address in setups:
@@ -126,7 +132,9 @@ def run(store):
                 emit(db,f'quarter-watch:{address}:{fx["end"]}',f'👀 15分钟异动预警 · {tokens[address]["symbol"]}\n量比 {fx["volume_ratio"]:.2f}；15分钟涨幅 {fx["change"]:+.1%}\n最新参考报价 {q["price"]:.8g} USDT\n地址 {address}\n尚未得到小时突破确认，安全与机构归属未核实；不是买入参考，未建立假定买入仓。',now)
                 alerts+=1
         db.execute('INSERT OR REPLACE INTO runtime VALUES(?,?)',('quarter_checked',json.dumps({a:t for a,t in rotation.items() if a in tokens})))
-    return {'as_of':radar.utc(),'version':VERSION,'status':'partial' if errors else 'ok','errors':sorted(set(errors)),'skipped':len(skipped),'positions_checked':len(positions),'position_quotes':{a:diagnostics[a] for a in position_addresses if a in diagnostics},'setups_checked':len(setups),'quarter_checked':len(selected),'directory_size':len(tokens),'directory_observed':catalog.get('observed'),'alerts':alerts,'elapsed':round(time.time()-start,2)}
+    info=sorted({e for e in errors if e=='position_no_recent_trade'})
+    real_errors=sorted({e for e in errors if e!='position_no_recent_trade'})
+    return {'as_of':radar.utc(),'version':VERSION,'status':'partial' if real_errors else 'ok','errors':real_errors,'info':info,'skipped':len(skipped),'positions_checked':len(positions),'position_quotes':{a:diagnostics[a] for a in position_addresses if a in diagnostics},'setups_checked':len(setups),'quarter_checked':len(selected),'directory_size':len(tokens),'directory_observed':catalog.get('observed'),'alerts':alerts,'elapsed':round(time.time()-start,2)}
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--data',required=True);args=p.parse_args();store=Store(args.data)

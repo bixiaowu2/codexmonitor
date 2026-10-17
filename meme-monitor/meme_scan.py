@@ -1,0 +1,668 @@
+#!/usr/bin/env python3
+"""Meme 币筛选器(统一妖币逻辑)。对 meme-radar 候选分 S/A/B 级。
+
+S级: 安全 + 流动性≥30K + 集中度≤80% + (score≥50 或聪明钱≥5) → 触发启动/回撤/止盈跟踪
+A级: 集中度 35-50% 或 score 高 → 观察
+B级: 其余 → 仅记录
+
+清洗后集中度: 用 GoPlus is_contract 剔除 LP 池/合约地址后的前10大户占比。
+数据源: meme-radar 候选(它的 db) + GoPlus(重新算集中度)。
+所有推送 TG + 钉钉。
+"""
+
+# ---------- 定位: 早期动量雷达(不是"meme 版妖币雷达") ----------
+#   池子是"新": scoring.py 给 age<=3h 的池 18 分(早期池) + 1h 动量/流动性/买卖比。
+#   判据是"分散": 集中度越低越好(筹码没被少数地址攥死, 抛压小)。
+#   妖币那套"高控盘=主力吸筹"需要合约市场能被逼空(OI/funding); meme 无合约腿,
+#   高控盘只等于"谁能先跑" → 由 safety.py 当风险处理。meme 妖币请在 demon 雷达里找。
+
+from __future__ import annotations
+import sys, json, time, types, os, concurrent.futures
+from pathlib import Path
+sys.path.insert(0, '/opt/meme-radar')
+from net import get_json
+from notify import send_channel
+
+DATA = Path('/var/lib/meme-radar')
+MATCHES = DATA / 'meme_matches.json'
+STATE = DATA / 'scan_state.json'
+
+
+# ---------- 钉钉降频 ----------
+# 钉钉自定义机器人有企业级月配额(实测 errcode 90030 会耗尽), 而这几套雷达每轮都直发。
+# 故把钉钉改为"入缓冲 + 每 DT_INTERVAL 汇总一条"; Telegram 不受影响, 仍即时。
+DT_INTERVAL = 21600
+DT_BUFFER_MAX = 30
+_DT_STATE = DATA / 'dt_digest.json'
+
+
+def _dt_load():
+    try:
+        return json.loads(_DT_STATE.read_text())
+    except Exception:
+        return {}
+
+
+def _dt_save(d):
+    try:
+        _DT_STATE.write_text(json.dumps(d))
+    except Exception:
+        pass
+GOPLUS_DELAY = 0.4
+
+GOPLUS_CHAIN = {'bsc': '56', 'solana': None, 'robinhood': '4663', 'xlayer': '196', 'arc': '5042', 'stable': '988'}
+
+
+def secret(env, name):
+    p = env.get(name + '_FILE')
+    return Path(p).read_text().strip() if p else env.get(name, '').strip()
+
+
+def make_cfg(env):
+    return types.SimpleNamespace(
+        telegram_enabled=env.get('MEME_TELEGRAM_ENABLED', 'false').strip().lower() == 'true',
+        telegram_token=secret(env, 'MEME_TELEGRAM_BOT_TOKEN'),
+        telegram_chat=secret(env, 'MEME_TELEGRAM_CHAT_ID'),
+        dingtalk_enabled=env.get('MEME_DINGTALK_ENABLED', 'false').strip().lower() == 'true',
+        dingtalk_webhook=secret(env, 'MEME_DINGTALK_WEBHOOK'),
+        dingtalk_secret=secret(env, 'MEME_DINGTALK_SECRET'),
+        dingtalk_keyword=env.get('MEME_DINGTALK_KEYWORD', 'meme').strip(),
+        timeout=10,
+    )
+
+
+def notify(env, body):
+    """Telegram 即时; 钉钉走缓冲降频(见文件头说明)。"""
+    cfg = make_cfg(env)
+    sent = False
+    if cfg.telegram_enabled:
+        try:
+            send_channel(cfg, body, 'telegram'); print('telegram: sent'); sent = True
+        except Exception as e:
+            print('tg fail:', str(e)[:100])
+    if cfg.dingtalk_enabled:
+        d = _dt_load()
+        buf = (d.get('buf') or []) + [body]
+        if time.time() - d.get('last', 0) < DT_INTERVAL:
+            d['buf'] = buf[-DT_BUFFER_MAX:]
+            _dt_save(d)
+            print(f'dingtalk: 缓冲 {len(buf)} 条, 未到发送窗口')
+            return sent
+        d['last'] = time.time()   # 无论成败都重置, 否则配额耗尽时每轮重试
+        try:
+            send_channel(cfg, '\n\n'.join(buf), 'dingtalk')
+            print(f'dingtalk: sent (汇总 {len(buf)} 条)'); sent = True
+            d['buf'] = []
+        except Exception as e:
+            print('dt fail:', str(e)[:100])
+            d['buf'] = buf[-DT_BUFFER_MAX:]
+        _dt_save(d)
+    return sent
+def get_candidates():
+    try:
+        import sqlite3
+        c = sqlite3.connect(str(DATA / 'meme-radar.sqlite'))
+        r = c.execute("SELECT value FROM runtime WHERE key='latest'").fetchone()
+        if not r:
+            return []
+        return json.loads(r[0]).get('rows', [])
+    except Exception:
+        return []
+
+
+# 市值上限: 超过它就不是"早期 meme"了 —— 要么是成熟大币(ASTER 54亿$/PUMP 41亿$/JUP 22亿$),
+# 要么是**代币化股票**(Solana 的 xStocks: NVDAx 5.46万亿$/TSLAx 1.49万亿$), 那些根本不该进 meme 雷达。
+# 依据: 币安 trading-signal 381 条真实买入信号的校准 —— 触发时市值 50万$+ 的, 达 2x 的比例是 **0%**。
+# 市值上限分两级(原为 5000万$ 一刀切, 太宽):
+#   校准数据显示 触发时市值 50万$+ 的, 达 2x 比例已经是 **0%**(n=42);
+#   <10万$ 达2x 41% / 达3x 21%; 10-50万$ 达2x 35%。
+#   故 S 收紧到 200万$(留一点余量), A 放到 2000万$(只做观察, 不发信号)。
+MC_CEIL_S = 2e6
+MC_CEIL_A = 20e6
+
+
+try:
+    import sys as _sys
+    _sys.path.insert(0, '/opt/alpha-radar')
+    import web3_client as _w3
+except Exception:
+    _w3 = None
+
+# 用币安官方 Web3 API 补数据(走 mihomo 代理 —— 这套接口有地区限制, 公开端点则直连)。
+# 只对 S/A 的前 N 只补, 控制调用量与耗时(每小时一次, 限速 1200 次/60s, 很宽裕)。
+WEB3_ENRICH_MAX = 60
+WEB3_CHAIN = {'bsc': '56', 'solana': 'CT_501', 'base': '8453', 'ethereum': '1'}
+
+
+# 我们自建"聪明钱包"命中的权重。
+# 这些钱包是**币安官方排行榜筛出来的**(胜率>=55% 且 已实现盈亏>=1万$ 且 交易数>=20),
+# 所以单个命中的信息量远大于 meme-rush/净流入榜里的原始计数(那些动辄几百)。
+# 取 10 表示"我们验证过的 1 个钱包 ≈ 原始口径的 10 个"。
+# 注意: 这是**加成**而非门槛 —— 因为命中很罕见(实测 40 个候选里才 2 个),
+# 当门槛用会几乎全灭; 当加成用则能把"被优质钱包盯上"的币往上抬。
+WALLET_HIT_WEIGHT = 10
+
+
+def cleaned_top10(chain, address):
+    """GoPlus 清洗后集中度。返回 0..1 或 None(数据不可靠/不支持)。"""
+    chain_id = GOPLUS_CHAIN.get(chain)
+    try:
+        if chain == 'solana':
+            raw = get_json(f'https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={address}', 10)
+            res = raw.get('result', {})
+            token = res.get(address) or res.get(str(address).lower()) or {}
+        else:
+            if not chain_id:
+                return None
+            raw = get_json(f'https://api.gopluslabs.io/api/v1/token_security/{chain_id}?contract_addresses={address}', 10)
+            res = raw.get('result', {})
+            token = res.get(address.lower()) or res.get(address) or {}
+        if str(raw.get('code')) != '1' or not isinstance(token, dict) or not token:
+            return None
+        holders = token.get('holders') or []
+        vals = []
+        for h in holders:
+            if not isinstance(h, dict):
+                continue
+            v = h.get('percent')
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not (0 < v <= 1):
+                return None  # 脏数据
+            if str(h.get('is_contract')) in ('1', 'true'):
+                continue
+            vals.append(v)
+        if not vals:
+            return None  # 无有效外部大户数据(全为合约/空), 视作未知而非 0
+        s = sum(sorted(vals, reverse=True)[:10])
+        return s if s <= 1.0 else None
+    except Exception:
+        return None
+
+
+def meme_rush_candidates():
+    """币安官方 meme-rush: 待迁移(Finalizing)+已迁移(Migrated), BSC/Solana。
+    自带 holdersTop10Percent(集中度)与 smartMoney/kol/pro/bn 持仓人数, 补 GoPlus 对新币无数据的缺口。"""
+    try:
+        import bn_skills
+    except Exception:
+        return []
+    out = []
+    for chain_name, chain_id in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
+        for rank in (bn_skills.RUSH_FINALIZING, bn_skills.RUSH_MIGRATED):
+            try:
+                rows = bn_skills.meme_rush(chain_id=chain_id, rank_type=rank, limit=30)
+            except Exception:
+                continue
+            for row in rows:
+                try:
+                    pr = bn_skills.to_pair(row, chain_name)
+                except Exception:
+                    pr = None
+                if pr and pr.get('address'):
+                    out.append(pr)
+    # 按聪明钱持仓人数取前 40(避免上百候选淹没; 聪明钱是最有信息量的维度)
+    out.sort(key=lambda x: -(x.get('smart_money_holders', 0) + x.get('kol_holders', 0) + x.get('pro_holders', 0)))
+    return out[:40]
+
+
+
+def rank_candidates():
+    """聪明钱净流入榜作为额外候选源(crypto-market-rank skill)。
+    与 meme-rush 互补: 这条按"净流入"排序, 且带市值与币安自带风险码。"""
+    try:
+        import bn_skills
+    except Exception:
+        return []
+    out = []
+    for chain_name, cid in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
+        try:
+            rows = bn_skills.smart_money_inflow(chain_id=cid, page=1, page_size=60)
+        except Exception:
+            continue
+        for r in rows:
+            try:
+                pr = bn_skills.rank_to_pair(r, chain_name)
+            except Exception:
+                pr = None
+            if pr and pr.get('address'):
+                out.append(pr)
+    # 净流入降序(榜单本身就是这个序, 这里保险起见再排一次)
+    out.sort(key=lambda x: -(x.get('_inflow') or 0))
+    return out
+
+
+def wallet_pool_candidates():
+    """自建聪明钱包池 → 候选(第四来源)。
+
+    **为什么需要这一步**: 分级里早就有 `smart >= 5 → S` / `smart >= 2 → A` 的直通路径,
+    但 `cands` 只来自 runtime.latest + meme-rush + 净流入榜, 钱包池从来不是来源 ——
+    所以 `smart_wallet_hits` 永远是 0, 权重/门槛调了也没用。
+
+    只取 **pairs 表里有行情** 的代币(否则没流动性/价格, 无法分级)。
+    命中数 = 有多少个不同钱包买过它(同一钱包多次只算一次)。
+    """
+    import sqlite3
+    from collections import defaultdict
+    try:
+        w = json.loads((DATA / 'smart_wallets.json').read_text())
+    except Exception:
+        return []
+    wallets = defaultdict(set)          # (chain, token) -> {wallet addresses}
+    for x in w:
+        chain = str(x.get('chain') or '').lower()
+        token = str(x.get('token') or '').lower()
+        addr = str(x.get('address') or '').lower()
+        if chain and token:
+            wallets[(chain, token)].add(addr)
+    if not wallets:
+        return []
+    out = []
+    try:
+        db = sqlite3.connect(str(DATA / 'meme-radar.sqlite'), timeout=10)
+        for (chain, token), addrs in wallets.items():
+            row = db.execute(
+                "SELECT payload FROM pairs WHERE key LIKE ? ORDER BY observed DESC LIMIT 1",
+                (f'{chain}:{token}:%',)).fetchone()
+            if not row:
+                continue
+            try:
+                pr = json.loads(row[0])
+            except Exception:
+                continue
+            if not pr.get('address'):
+                continue
+            pr['smart_wallet_hits'] = len(addrs)      # 去重后的钱包数
+            pr['score_meta'] = {'score': 0}
+            pr['_from_wallet'] = True
+            out.append(pr)
+        db.close()
+    except Exception:
+        return []
+    out.sort(key=lambda x: -(x.get('smart_wallet_hits') or 0))
+    return out
+
+
+def apply_safety(cands):
+    """给「缺安全字段 且 有钱包命中」的候选现查一次安全，让它们有机会进 S。
+
+    安全字段完整的（radar 那条流水线来的）不动，避免重复查询。
+    预算有限: 最多 60 只 / 90 秒，按(钱包命中数, 流动性)优先。
+    """
+    # ⚠️ 不能写 `from safety import ...` —— meme_scan 把 /opt/alpha-radar 插到了 sys.path[0],
+    # 那里也有个 safety.py(没有 Checker), 会把 meme-radar 这份遮蔽掉。
+    # 按文件路径显式加载, 绕开同名遮蔽。
+    try:
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location(
+            'meme_safety', str(Path(__file__).resolve().parent / 'safety.py'))
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        Checker, merge_gmgn_security = _mod.Checker, _mod.merge_gmgn_security
+    except Exception as e:
+        print(f'安全检查不可用: {type(e).__name__}: {str(e)[:80]}')
+        return 0
+    import sqlite3
+    db = sqlite3.connect(str(DATA / 'meme-radar.sqlite'), timeout=15)
+    cache = {}
+    try:
+        row = db.execute("SELECT value FROM runtime WHERE key='safety_cache'").fetchone()
+        if row and row[0]:
+            cache = json.loads(row[0])
+    except Exception:
+        cache = {}
+    todo = [c for c in cands
+            if str(c.get('safety_status') or '').lower() not in ('safe', 'blocked')
+            and (c.get('smart_wallet_hits') or 0) > 0
+            and c.get('chain') and c.get('address')]
+    if not todo:
+        db.close()
+        return 0
+    todo.sort(key=lambda c: (-(c.get('smart_wallet_hits') or 0), -(c.get('liquidity_usd') or 0)))
+    checker = Checker(True, 10, cache, 900, 60, 90)
+    n = 0
+    for c in todo:
+        try:
+            result = merge_gmgn_security(checker.check(c), c)
+        except Exception:
+            continue
+        c['safety_status'] = result.get('status', 'unknown')
+        c['safety_blocks'] = result.get('blocks') or []
+        c['safety_warnings'] = result.get('warnings') or []
+        c['safety_provider'] = result.get('provider', '')
+        c['safety_eligible'] = result.get('eligible', False)
+        n += 1
+    try:
+        db.execute("INSERT OR REPLACE INTO runtime(key,value) VALUES('safety_cache',?)",
+                   (json.dumps(checker.snapshot(), ensure_ascii=False),))
+        db.commit()
+    except Exception:
+        pass
+    db.close()
+    print(f'安全检查补查: {n} 只(候选共 {len(todo)} 只缺安全字段)')
+    return n
+
+
+def main():
+    import os
+    env = dict(os.environ)
+    cands = get_candidates()
+    # 合并币安官方 meme-rush 候选(自带集中度+聪明钱, 解决 GoPlus 新币无数据)
+    rush = meme_rush_candidates()
+    _seen = {(c.get('chain'), str(c.get('address', '')).lower()) for c in cands}
+    for r in rush:
+        k = (r.get('chain'), str(r.get('address', '')).lower())
+        if k in _seen:
+            continue
+        _seen.add(k)
+        r['score_meta'] = {'score': 0}
+        r['_from_rush'] = True
+        cands.append(r)
+    # 并入聪明钱净流入榜(crypto-market-rank)
+    rank = rank_candidates()
+    for r in rank:
+        k = (r.get('chain'), str(r.get('address', '')).lower())
+        if k in _seen:
+            continue
+        _seen.add(k)
+        r['score_meta'] = {'score': 0}
+        r['_from_rank'] = True
+        cands.append(r)
+    # 并入**自建聪明钱包池**(第四来源)。注意: 已在 cands 里的标的不覆盖, 只补命中数。
+    wal = wallet_pool_candidates()
+    _hit_map = {(x.get('chain'), str(x.get('address', '')).lower()): int(x.get('smart_wallet_hits') or 0)
+                for x in wal}
+    for c in cands:
+        k = (c.get('chain'), str(c.get('address', '')).lower())
+        if k in _hit_map:
+            c['smart_wallet_hits'] = max(int(c.get('smart_wallet_hits') or 0), _hit_map[k])
+    for r in wal:
+        k = (r.get('chain'), str(r.get('address', '')).lower())
+        if k in _seen:
+            continue
+        _seen.add(k)
+        cands.append(r)
+    print(f'候选: meme-radar + meme-rush + 净流入榜{len(rank)} + 钱包池{len(wal)}, 合计 {len(cands)}')
+    if not cands:
+        print('无 meme 候选, 跳过')
+        return
+    # 分级前先给「缺安全字段 + 有钱包命中」的候选补一次安全检查,
+    # 否则 safe_ok 恒 False → 它们永远够不到 S 级(只能进 A)。
+    apply_safety(cands)
+
+    # 算清洗后集中度(限流保护: 串行 + 延迟)
+    for c in cands:
+        chain = c.get('chain')
+        addr = c.get('address')
+        if c.get('_from_rush'):
+            # meme-rush 自带集中度(百分数)与聪明钱持仓人数, 不查 GoPlus
+            top10 = c.get('holders_top10_pct')
+            c['_ct'] = (top10 / 100.0) if top10 is not None else None
+            _hits = int(c.get('smart_wallet_hits') or 0)   # 我们自建的聪明钱包命中数
+            c['_smart'] = (c.get('smart_money_holders', 0) + c.get('kol_holders', 0)
+                           + c.get('pro_holders', 0) + (c.get('bn_holders', 0) or 0) * 2
+                           + _hits * WALLET_HIT_WEIGHT)
+            c['_score'] = 0
+            liq = c.get('liquidity_usd') or 0
+            ct = c['_ct']
+            smart = c['_smart']
+            sniper = c.get('holders_sniper_pct') or 0   # 狙击机器人占比: 高则开盘即砸
+            dev = c.get('holders_dev_pct') or 0          # dev 持仓占比: 高则随时可砸
+            # 风险过滤: 狙击手/DEV 占比过高直接降级(不管聪明钱多少)
+            risky = (sniper >= 50) or (dev >= 20)
+            # 分级: 聪明钱在场 + 流动性充足 + 集中度不极端 + 无高砸盘风险
+            # 与 GoPlus 分支统一: 低集中度=好(无集中度数据的靠聪明钱兜底)
+            if smart >= 5 and liq >= 30000 and (ct is None or ct <= 0.80) and not risky:
+                c['_tier'] = 'S'
+            elif smart >= 2 and liq >= 10000 and not risky and (ct is None or ct <= 0.80):
+                c['_tier'] = 'A'
+            else:
+                c['_tier'] = 'B'
+            c['_risky'] = risky
+            continue
+        if c.get('_from_rank'):
+            # 净流入榜: 字段名与 meme-rush 不同, 用 kycHolders 当"可信钱包数"代理,
+            # 风险用币安自带 tokenRiskLevel/tokenRiskCodes。口径与上面保持一致。
+            ct = c.get('holders_top10_pct')
+            c['_ct'] = (ct / 100.0) if ct is not None else None
+            _hits = int(c.get('smart_wallet_hits') or 0)
+            c['_smart'] = int(c.get('_kyc') or 0) + _hits * WALLET_HIT_WEIGHT
+            c['_score'] = 0
+            liq = c.get('liquidity_usd') or 0
+            lvl = c.get('_risk_level')
+            risky = (lvl is not None and lvl >= 2) or bool(c.get('_risk_codes'))
+            # 阈值按实测选定(143 条候选扫描): kyc>=5 时 S 会涨到 33 条(太松),
+            # kyc>=50 且净流入为正时收敛到 13 条。净流入>0 是这档的"聪明钱"本义。
+            if (c['_smart'] >= 50 and liq >= 30000 and (c.get('_inflow') or 0) > 0
+                    and (c['_ct'] is None or c['_ct'] <= 0.80) and not risky):
+                c['_tier'] = 'S'
+            elif (c['_smart'] >= 10 and liq >= 10000 and not risky
+                  and (c['_ct'] is None or c['_ct'] <= 0.80)):   # A 级也要求低集中度
+                c['_tier'] = 'A'
+            else:
+                c['_tier'] = 'B'
+            c['_risky'] = risky
+            continue
+        if chain in GOPLUS_CHAIN:
+            c['_ct'] = cleaned_top10(chain, addr)
+            time.sleep(GOPLUS_DELAY)
+        else:
+            c['_ct'] = None
+        s = c.get('score_meta', {}).get('score', 0) if isinstance(c.get('score_meta'), dict) else 0
+        c['_score'] = s
+        # 分级(混合): BSC/Solana 用清洗后集中度(像妖币); 其他链用 score+聪明钱兜底
+        s = c['_score']
+        # 分级用 safety_status(与 radar.py:260 / meme_track.py 的既有约定一致), 不用 safety_eligible:
+        # eligible 要求安全字段"全覆盖"; GoPlus 覆盖不全时(实测 runtime.latest 14 行全带
+        # "持仓集中度数据缺失或无效" warning)恒为 False → 凡要求 elig 的分级永不成立(死代码)。
+        # 分级是排序, 不是安全放行; 硬风险仍由 safety_status=='blocked' 否决。
+        safe_ok = str(c.get('safety_status') or '').lower() == 'safe' and not c.get('safety_blocks')
+        liq = c.get('liquidity_usd') or 0
+        smart = c.get('smart_wallet_hits') or 0
+        vol1h = c.get('volume_1h') or 0
+        ct = c.get('_ct')
+        has_ct = ct is not None  # GoPlus 对该币有没有 holders 数据
+        if has_ct:
+            # 与 meme-rush 分支同构。原写法 `ct >= 0.50 and elig` 是死代码(elig 恒 False),
+            # 且与 safety.py 互斥(safety 把 >=50% 记 warning)——对 meme 而言高控盘是风险不是利好。
+            # 低集中度 = 筹码没被少数地址攥死 = 抛压小。这是**早期动量**的判据, 不是妖币那套。
+            # 妖币的高控盘逻辑靠"合约市场能被逼空"(OI/funding); meme 是纯 DEX 无合约腿,
+            # 高控盘只剩"谁能先跑" —— 那是 rug 风险, 不是机会。故不套用 demon 的判据。
+            if safe_ok and liq >= 30000 and ct <= 0.80 and (s >= 50 or smart >= 5):
+                c['_tier'] = 'S'
+            elif (safe_ok and liq >= 10000 and (s >= 35 or smart >= 2)
+                  and (ct is None or ct <= 0.80)):      # A 级也要求低集中度(与 S 一致)
+                c['_tier'] = 'A'
+            else:
+                c['_tier'] = 'B'
+        else:
+            # 其他链(robinhood/arc等): score + 安全 + 流动性 + 聪明钱
+            # 与 GOPLUS 分支对齐: 除了 score, 也要给"钱包命中够多"开 S 通道 ——
+            # 否则钱包池里 bsc 但 GoPlus 无数据的币(score=0)永远进不了 S。
+            # 原条件(score 必要)保留, 只额外加"钱包命中>=5"这条通道 ——
+            # 不能写成全 OR, 否则只要成交量大就能进 S。
+            if (safe_ok and liq >= 30000 and (ct is None or ct <= 0.80)
+                    and ((s >= 50 and (smart >= 1 or vol1h >= 50000)) or smart >= 5)):
+                c['_tier'] = 'S'
+            elif (safe_ok and liq >= 10000 and (s >= 35 or smart >= 1)
+                  and (ct is None or ct <= 0.80)):
+                c['_tier'] = 'A'
+            else:
+                c['_tier'] = 'B'
+    # 市值上限统一降级: 超限的从 S/A 打到 B(仍记录, 但不占用信号名额)
+    for c in cands:
+        v = c.get('market_cap')
+        try:
+            v = float(v) if v is not None else None
+        except (TypeError, ValueError):
+            v = None
+        if not v:
+            continue
+        if v > MC_CEIL_A:
+            if c.get('_tier') in ('S', 'A'):
+                c['_tier'] = 'B'
+                c['_big_cap'] = True
+        elif v > MC_CEIL_S and c.get('_tier') == 'S':
+            c['_tier'] = 'A'          # 200万~2000万: 降到 A(观察, 不发信号)
+            c['_big_cap'] = True
+
+    # ---- 币安官方 Web3 API 补数据(走代理) ----
+    #   top10 集中度: 官方口径(每个持币地址都带 holdingPercent), 替代/对照 GoPlus。
+    #   dev 画像: 历史发币数 totalToken + 当前持仓 devHoldingPercent。
+    #     totalToken 高 = 该 dev 连环发币(连环 rug); devHoldingPercent 高 = 随时能砸盘。
+    if _w3:
+        ranked = sorted([c for c in cands if c.get('_tier') in ('S', 'A')],
+                        key=lambda c: 0 if c['_tier'] == 'S' else 1)
+        ok = 0
+        for c in ranked[:WEB3_ENRICH_MAX]:
+            cid = WEB3_CHAIN.get(str(c.get('chain', '')).lower())
+            addr = c.get('address')
+            if not cid or not addr:
+                continue
+            try:
+                c['_ct_off'] = _w3.top10_percent(cid, addr)
+                ok += 1
+            except Exception:
+                c['_ct_off'] = None
+            try:
+                d = _w3.dev_info(cid, addr) or {}
+                dh = d.get('devHoldingInfo') or {}
+                dl = d.get('devLaunchedInfo') or {}
+                c['_dev_pct'] = float(dh.get('devHoldingPercent') or 0)
+                c['_dev_tokens'] = int(float(dl.get('totalToken') or 0))
+            except Exception:
+                c['_dev_pct'] = None
+                c['_dev_tokens'] = None
+            # dev 风险 → 降级(与 sniper/dev 风险同一套处理)
+            if (c.get('_dev_pct') or 0) >= 20 or (c.get('_dev_tokens') or 0) >= 10:
+                c['_risky'] = True
+                if c['_tier'] in ('S', 'A'):
+                    c['_tier'] = 'B'
+                    c['_dev_risky'] = True
+            # 极端集中度 → 否决。A 级原先**不检查集中度**, 导致 96~100% 的币也进 A
+            # (实测 taptap 官方 99.9% / Douyin 100%), 与"低集中度=好"的策略矛盾。
+            # 优先用官方口径(_ct_off), 没有则退回 GoPlus(_ct, 转成百分数)。
+            # 两个口径不可混用(实测差 +23~34pp):
+            #   清洗口径(GoPlus, 剔除 LP/销毁) —— 用它卡 80%, 与分级门槛一致
+            #   官方口径(币安, 不剔除) —— 含 LP 虚高, 只做 90% 极端兜底
+            _ct_clean = (c['_ct'] * 100) if c.get('_ct') is not None else None
+            _ct_off = c.get('_ct_off')
+            _ct_gate, _ct_eff = None, None
+            if _ct_clean is not None:
+                _ct_gate, _ct_eff = 80, _ct_clean
+            elif _ct_off is not None:
+                _ct_gate, _ct_eff = 90, _ct_off
+            if _ct_eff is not None and _ct_eff >= _ct_gate:
+                c['_risky'] = True
+                if c['_tier'] in ('S', 'A'):
+                    c['_tier'] = 'B'
+                    c['_conc_risky'] = True
+                    c['_conc_gate'] = _ct_gate
+                    if _ct_eff >= 90:
+                        c['_conc_extreme'] = True
+        print(f'官方 Web3 API 补数: {ok} 只(集中度+dev画像)')
+
+    sa = [c for c in cands if c['_tier'] in ('S', 'A')]
+    # S 优先, 组内按集中度**升序**(低=好, 与本雷达"早期动量/筹码分散"的判据一致), 集中度未知的排最后。
+    # S 优先 → 低集中度优先(早期动量: 筹码没被攥死) → **小市值优先** → 聪明钱多的优先。
+    # 小市值这一维来自币安 trading-signal 381 条真实买入信号的校准:
+    #   触发时市值 <10万$ 达 2x 41% / 达 3x 21%; 10-50万$ 达 2x 35%;
+    #   **50-200万$ 达 2x 0%**; >1000万$ 达 2x 0% —— 市值是最强的区分维度, 越小越好。
+    # (市值缺失的排在最后, 用 9e18 兜底)
+    sa.sort(key=lambda c: (0 if c['_tier'] == 'S' else 1,
+                           (c['_ct'] if c.get('_ct') is not None else 9),
+                           (c.get('market_cap') if c.get('market_cap') else 9e18),
+                           -(c.get('_smart', 0))))
+
+    # 保存 matches(S+A 都写, 供 meme_track 跟踪与日更; S 级才触发信号)
+    s_tier = [{'symbol': c.get('symbol'), 'chain': c.get('chain'), 'address': c.get('address'),
+               'score': c.get('_score', 0),
+               'liquidity_usd': c.get('liquidity_usd'),
+               'price_usd': c.get('price_usd'),
+               'cleaned_top10': c.get('_ct'),
+               'top10_official': c.get('_ct_off'),
+               'dev_pct': c.get('_dev_pct'),
+               'dev_tokens': c.get('_dev_tokens'),
+               'market_cap': c.get('market_cap'),
+               'smart': c.get('_smart', c.get('smart_wallet_hits', 0)),
+               'wallet_hits': int(c.get('smart_wallet_hits') or 0),
+               'futures': c.get('futures'),
+               'tier': c.get('_tier', 'B')}
+              for c in sa]
+    MATCHES.write_text(json.dumps(s_tier, ensure_ascii=False, indent=2))
+
+    ts = time.strftime('%m-%d %H:%M UTC', time.gmtime())
+    prev = {}
+    if MATCHES.with_suffix('.prev.json').exists():
+        try:
+            prev = {x['symbol']: x for x in json.loads(MATCHES.with_suffix('.prev.json').read_text())}
+        except Exception:
+            pass
+    cur = {x['symbol']: x for x in s_tier}
+    new = [s for s in cur if s not in prev]
+    gone = [s for s in prev if s not in cur]
+    MATCHES.with_suffix('.prev.json').write_text(json.dumps(s_tier, ensure_ascii=False))
+
+    header = f'🌊 Meme S级候选 @ {ts}'
+    cond = '条件: 安全 + 流动性≥30K + 集中度≤80% + (score≥50 或聪明钱≥5); S级触发信号'
+    if sa:
+        n_s = sum(1 for c in cands if c['_tier'] == 'S')
+        n_a = sum(1 for c in cands if c['_tier'] == 'A')
+        n_b = sum(1 for c in cands if c['_tier'] == 'B')
+        body_lines = [header, cond,
+                      f'完整清单: {len(cands)}个候选, 筛出 S={n_s}/A={n_a}/B={n_b}',
+                      'Meme候选排序(S+A级):']
+        for i, c in enumerate(sa[:10], 1):
+            if c.get('_from_rush'):
+                sm = int(c.get('_smart', 0))
+                ct_s = f"集中度{c['_ct']*100:.0f}%" if c.get('_ct') is not None else "集中度未知"
+                mc_s = f" 市值{(c.get('market_cap') or 0)/1e6:.2f}M$" if c.get('market_cap') else ""
+                wh = int(c.get('smart_wallet_hits') or 0)
+                wh_s = f" ⭐自建钱包命中{wh}" if wh else ""
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) {ct_s} 聪明钱{sm}人{mc_s}{wh_s}\n   合约 {c.get('address','')}")
+                continue
+            elif c.get('_ct') is not None:
+                mc_s = f" 市值{(c.get('market_cap') or 0)/1e6:.2f}M$" if c.get('market_cap') else ""
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 市值{(c.get('market_cap') or 0)/1e6:.2f}M$ score {c['_score']:.0f}")
+            else:
+                liq_w = (c.get('liquidity_usd') or 0) / 1000
+                sm = c.get('smart_wallet_hits') or 0
+                mc_s = f" 市值{(c.get('market_cap') or 0)/1e6:.2f}M$" if c.get('market_cap') else ""
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) score {c['_score']:.0f} 流动性{liq_w:.0f}K 聪明钱{sm}{mc_s}")
+        if len(sa) > 10:
+            body_lines.append(f"(S+A 共 {len(sa)} 个, 以上为前 10)")
+        b = [c for c in cands if c['_tier'] == 'B']
+        if b:
+            body_lines.append(f"(B级仅记录 {len(b)} 个)")
+    else:
+        body_lines = [header, cond, '当前无 S/A 级命中']
+    full = '\n'.join(body_lines)
+    print(full)
+
+    # 变化时推, 或每天一次汇总
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    changed = bool(new or gone) and bool(prev)
+    if changed:
+        diff = []
+        if new:
+            diff.append('新增: ' + ', '.join(
+                f"{cur[s]['symbol']}({(cur[s].get('cleaned_top10') or 0)*100:.0f}%)" for s in sorted(new)))
+        if gone:
+            diff.append('退出: ' + ', '.join(gone))
+        body = header + '\n' + '\n'.join(diff)
+        if sa:
+            body += '\n\n当前S+A级: ' + ', '.join(f"{c.get('symbol')}({c['_tier']})" for c in sa)
+        notify(env, body)
+        state['last_notify'] = time.time()
+    elif time.time() - state.get('last_notify', 0) >= 24 * 3600:
+        notify(env, full)
+        state['last_notify'] = time.time()
+    else:
+        print('无变化, 静默')
+    STATE.write_text(json.dumps(state))
+
+
+if __name__ == '__main__':
+    main()

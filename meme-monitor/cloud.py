@@ -15,6 +15,7 @@ class CycleDeadline(BaseException):pass
 def timeout(*_):raise CycleDeadline('cycle_deadline')
 
 def deliver_one(cfg,store):
+    return False  # 推送已迁移到 meme_scan/meme_track, 主服务只采集不投递
     now=time.time();store.cleanup(now)
     enabled=[x for x,on in [('telegram',cfg.telegram_enabled),('dingtalk',cfg.dingtalk_enabled)] if on]
     with store.db() as d:

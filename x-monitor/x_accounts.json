@@ -17,7 +17,7 @@
         "https://www.lookonchain.com"
       ],
       "reason": "链上资金与钱包交易报道；官网链接核验身份，钱包标签需独立复核。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 1,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -39,7 +39,7 @@
         "https://thedefiant.io/news/hacks/zachxbt-accuses-influencer-ansem-promoting-solana-memecoin-pump-dumps-ac9dfb13"
       ],
       "reason": "链上风险与事件调查，负面提及不能当成利好。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 2,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -56,7 +56,7 @@
         "https://solana.com"
       ],
       "reason": "Solana官网引用的生态开发者观点；用于生态变化，不作为跟单依据。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 3,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -73,7 +73,7 @@
         "https://www.bnbchain.org"
       ],
       "reason": "BNB Chain官方公告，官网链接核验。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -90,7 +90,7 @@
         "https://solana.com"
       ],
       "reason": "Solana官方开发生态账户，官网链接核验。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -107,7 +107,7 @@
         "https://robinhood.com/us/en/crypto/chain/"
       ],
       "reason": "Robinhood Chain官方页面页脚链接；企业公告不等于认可任意同名代币。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -124,7 +124,7 @@
         "https://docs.arc.io"
       ],
       "reason": "Arc官方文档链接核验。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -141,7 +141,7 @@
         "https://www.stable.xyz"
       ],
       "reason": "Stable官网链接核验。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -158,7 +158,7 @@
         "https://www.okx.com/xlayer"
       ],
       "reason": "OKX X Layer官网链接核验。",
-      "interval_seconds": 120,
+      "interval_seconds": 900,
       "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -217,7 +217,7 @@
       "score_weight": 0
     },
     {
-      "handle": "spotonchain",
+      "handle": "hupzy_agent",
       "chains": [
         "bsc",
         "solana",
@@ -228,32 +228,10 @@
       ],
       "category": "research",
       "evidence": [
-        "https://x.com/spotonchain"
+        "https://x.com/hupzy_agent"
       ],
-      "reason": "跨链链上资金与交易分析；用于事件线索，需独立复核。",
-      "interval_seconds": 300,
-      "priority": 4,
-      "enabled": true,
-      "reviewed_at": "2026-09-26",
-      "track_record": "not_backtested",
-      "score_weight": 0
-    },
-    {
-      "handle": "ArkhamIntel",
-      "chains": [
-        "bsc",
-        "solana",
-        "robinhood",
-        "xlayer",
-        "arc",
-        "stable"
-      ],
-      "category": "research",
-      "evidence": [
-        "https://x.com/ArkhamIntel"
-      ],
-      "reason": "地址实体与链上资金分析；标签可能滞后或不完整。",
-      "interval_seconds": 300,
+      "reason": "Spot On Chain 已改名 Hupzy(实测旧 handle 只剩迁移提示页)",
+      "interval_seconds": 900,
       "priority": 4,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -272,28 +250,10 @@
       ],
       "category": "risk_research",
       "evidence": [
-        "https://x.com/Bubblemaps"
+        "https://bubblemaps.io"
       ],
-      "reason": "持仓关系和钱包聚类研究；用于集中度与关联线索。",
-      "interval_seconds": 300,
-      "priority": 4,
-      "enabled": true,
-      "reviewed_at": "2026-09-26",
-      "track_record": "not_backtested",
-      "score_weight": 0
-    },
-    {
-      "handle": "TheDataNerd",
-      "chains": [
-        "bsc",
-        "solana"
-      ],
-      "category": "research",
-      "evidence": [
-        "https://x.com/TheDataNerd"
-      ],
-      "reason": "链上数据观察；不等于项目背书。",
-      "interval_seconds": 300,
+      "reason": "代币持仓集中度与关联钱包可视化；用于风险筛查，不代表项目背书。",
+      "interval_seconds": 900,
       "priority": 4,
       "enabled": true,
       "reviewed_at": "2026-09-26",
@@ -312,28 +272,33 @@
       ],
       "category": "research",
       "evidence": [
-        "https://x.com/DefiLlama"
+        "https://defillama.com"
       ],
-      "reason": "生态和协议数据；关注链上增长和流动性，不直接等于Meme信号。",
-      "interval_seconds": 300,
-      "priority": 4,
+      "reason": "跨链协议、流动性和生态数据；用于背景和趋势，不作为喊单信号。",
+      "interval_seconds": 900,
+      "priority": 5,
       "enabled": true,
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",
       "score_weight": 0
     },
     {
-      "handle": "Ansem",
+      "handle": "blknoiz06",
       "chains": [
-        "solana"
+        "solana",
+        "bsc",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
       ],
       "category": "market_commentator",
       "evidence": [
-        "https://x.com/Ansem"
+        "https://x.com/blknoiz06"
       ],
-      "reason": "Solana/Meme市场观点，影响力高但存在推广和利益冲突风险。",
-      "interval_seconds": 300,
-      "priority": 8,
+      "reason": "Ansem 真号(旧 handle 404)",
+      "interval_seconds": 900,
+      "priority": 6,
       "enabled": true,
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",
@@ -342,34 +307,150 @@
     {
       "handle": "AltcoinSherpa",
       "chains": [
+        "solana",
         "bsc",
-        "solana"
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
       ],
       "category": "market_commentator",
       "evidence": [
         "https://x.com/AltcoinSherpa"
       ],
-      "reason": "交易观点账户，存在跟单和利益冲突风险。",
-      "interval_seconds": 300,
-      "priority": 8,
+      "reason": "高影响力交易观点源；高风险，只推送原帖，不参与买入评分。",
+      "interval_seconds": 900,
+      "priority": 6,
       "enabled": true,
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",
       "score_weight": 0
     },
     {
-      "handle": "Murad",
+      "handle": "muststopmurad",
+      "chains": [
+        "solana",
+        "bsc",
+        "robinhood",
+        "xlayer",
+        "arc",
+        "stable"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/muststopmurad"
+      ],
+      "reason": "Murad 真号(旧 handle 是 804 粉的冒牌号)",
+      "interval_seconds": 900,
+      "priority": 6,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "CryptoHayes",
+      "chains": [
+        "solana",
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/CryptoHayes"
+      ],
+      "reason": "Arthur Hayes — Maelstrom CIO / Flop Labs CEO",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Rewkang",
+      "chains": [
+        "solana",
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/Rewkang"
+      ],
+      "reason": "Andrew Kang — Mechanism Capital, 42万粉",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Cobie",
+      "chains": [
+        "solana",
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/Cobie"
+      ],
+      "reason": "Cobie — 120万粉, 行业元老/长期观点",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "Pentosh1",
+      "chains": [
+        "solana",
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/Pentosh1"
+      ],
+      "reason": "Pentosh1 — 95万粉, 山寨/情绪面",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "NFTCPS",
       "chains": [
         "bsc",
         "solana"
       ],
       "category": "market_commentator",
       "evidence": [
-        "https://x.com/Murad"
+        "https://x.com/NFTCPS"
       ],
-      "reason": "Meme市场高影响力观点，风险和利益冲突高，只做观察。",
-      "interval_seconds": 300,
-      "priority": 8,
+      "reason": "鸟哥 / 蓝鸟会 — 中文加密社区发起人, 22.5K 帖",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-09-26",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "waveking1314",
+      "chains": [
+        "solana",
+        "bsc"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/waveking1314"
+      ],
+      "reason": "断浪 WaveKing — Trader, 链上机会 + AI 金狗信号",
+      "interval_seconds": 900,
+      "priority": 10,
       "enabled": true,
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",

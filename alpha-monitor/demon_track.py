@@ -53,7 +53,7 @@ def telegram_send(token, chat, text):
 
 
 def dingtalk_send(env, text):
-    if env.get('DINGTALK_ENABLED', 'false').strip().lower() != 'true':
+    if env.get('DEMON_DINGTALK_ENABLED', env.get('DINGTALK_ENABLED', 'false')).strip().lower() != 'true':
         return
     cfg = types.SimpleNamespace(
         ding_webhook=secret(env, 'DINGTALK_WEBHOOK'),
@@ -165,12 +165,12 @@ def main():
             if first and first > 0:
                 mult = last / first
                 if mult >= TP2 and sym + ':tp2' not in tp_hit:
-                    _msg = f"💰 第二档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。"
+                    _msg = f"💰 第二档止盈 · {sym}\n较候选基准价(合约首日收盘) {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。"
                     alerts.append(_msg)
                     sq_events.append({"kind": "止盈2", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                     tp_hit.add(sym + ':tp2')
                 elif mult >= TP1 and sym + ':tp1' not in tp_hit:
-                    _msg = f"💰 第一档止盈 · {sym}\n较首收价 {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。"
+                    _msg = f"💰 第一档止盈 · {sym}\n较候选基准价(合约首日收盘) {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。"
                     alerts.append(_msg)
                     sq_events.append({"kind": "止盈1", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
                     tp_hit.add(sym + ':tp1')

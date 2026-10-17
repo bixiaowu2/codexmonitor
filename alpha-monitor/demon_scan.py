@@ -51,7 +51,7 @@ def telegram_send(token, chat, text):
 
 
 def dingtalk_send(env, text):
-    if env.get('DINGTALK_ENABLED', 'false').strip().lower() != 'true':
+    if env.get('DEMON_DINGTALK_ENABLED', env.get('DINGTALK_ENABLED', 'false')).strip().lower() != 'true':
         return
     cfg = types.SimpleNamespace(
         ding_webhook=secret(env, 'DINGTALK_WEBHOOK'),

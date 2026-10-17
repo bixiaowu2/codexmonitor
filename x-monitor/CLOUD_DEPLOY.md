@@ -1,7 +1,5 @@
 # 云服务器常驻：X → Telegram + 钉钉
 
-从 GitHub 克隆本仓库后，先进入 `x-monitor/` 子目录；下文命令均在该目录执行。
-
 建议从一台 Ubuntu 24.04、2 核 / 4GB 内存的服务器和少量监控账号开始。服务器需能访问 X、api.telegram.org 和钉钉机器人地址。无需 X 付费 API；Telegram 使用 Telegram Bot API，这是消息发送接口，不是 X API。
 
 Oracle ARM 服务器已能使用普通 Chromium + Xvfb 读取三个账号的公开帖子；headless 浏览器在同一服务器返回 403，因此默认禁用 headless。真实群推送和五分钟送达仍需配置机器人后测量。
@@ -15,9 +13,8 @@ Telegram：使用官方 @BotFather 创建机器人，将机器人加入目标群
 在服务器项目目录只在首次部署创建 `.env`，配置以下字段：
 
 ```env
-X_ACCOUNTS='binancezh,cz_binance,heyibinance,binancewallet'
+X_ACCOUNTS='binancezh,czbinanceprd,heyibinance'
 POLL_SECONDS=120
-WATCHDOG_SECONDS=900
 HEADLESS=false
 TELEGRAM_BOT_TOKEN='填写BotFather提供的Token'
 TELEGRAM_CHAT_ID='填写目标群或频道ID'

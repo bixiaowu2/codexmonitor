@@ -1,0 +1,7 @@
+.env
+browser-profile/
+data/
+routes.json
+.venv/
+__pycache__/
+*.pyc

@@ -32,6 +32,14 @@ MAX_GAP_SECONDS = 5400   # 抖动上限 90 分钟
 MAX_TWEET_LEN = 280
 
 
+
+
+def _oi(m):
+    """baseline.json 的字段名中途从 `oi` 改成了 `oi_notional`, 旧文件仍是 `oi`。
+    两处 review 只读 `oi_notional` → 旧 baseline 全读到 0 → 复盘永远"无可发内容"。
+    这里兼容两种名字。"""
+    return m.get('oi_notional') or m.get('oi') or 0
+
 def load_creds():
     d = json.loads(CREDS.read_text())
     return d['api_key'], d['api_secret'], d['access_token'], d['access_secret']
@@ -157,7 +165,10 @@ def tg_send_photo(path, caption=""):
 
 
 def compose_scan_alpha():
-    """筛选类(早间栏目): 钩子帖 + Thread跟帖, 配图 scan.png。"""
+    """筛选类(早间栏目)。风格见 post_style: 短行 + 具体数字 + 结尾开放循环。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
     try:
         import x_chart
         x_chart.chart_scan()
@@ -170,27 +181,30 @@ def compose_scan_alpha():
     sa = [x for x in m if x.get('tier') in ('S', 'A')]
     if not sa:
         return None
-    top = sa[0]
-    # 钩子: 首句反差/结论
-    hook = (f"链上Top10持仓 {top['cleaned_top10']*100:.0f}%——"
-            f"{top['symbol']} 是主力控盘还是即将引爆?\n\n"
-            f"今日Alpha妖币观察池 👇")
-    main_tweet = (hook + "\n\n"
-                  f"🥇 {top['symbol']} 集中度{top['cleaned_top10']*100:.0f}% 持仓{top['oi_notional']/1e6:.1f}M USDT\n"
-                  + "\n".join(f"🥈 {x['symbol']} 集中度{x['cleaned_top10']*100:.0f}% 持仓{x['oi_notional']/1e6:.1f}M USDT"
-                               for x in sa[1:3])
-                  + "\n\n筛选: Alpha+合约+未上现货+大户控盘≥60%\n#BinanceAlpha #Crypto")
-    thread2 = ("为什么盯这几个?\n"
-               "▪ 上了币安合约 = 有真实资金博弈\n"
-               "▪ 未上现货 = 现货上市前是资金布局窗口\n"
-               "▪ 清洗LP后的大户集中度 = 主力控盘强度\n\n"
-               "横盘越久, 拉起来越猛。附图为集中度与持仓对比。")
-    return {"main": main_tweet, "thread": [thread2], "chart": "/var/lib/x-publisher/charts/scan.png",
+    picks = sa[:3]
+    head = f"我扒了全部币安Alpha代币\n只有 {len(picks)} 个同时过三道筛"
+    items = [f"{'🥇🥈🥉'[i]} {x['symbol']}  控盘 {x['cleaned_top10']*100:.0f}%\n"
+             f"合约持仓 {x['oi_notional']/1e6:.1f}M USDT"
+             for i, x in enumerate(picks)]
+    tail = ("三道筛: 已上合约 · 未上现货 · 大户控盘≥60%\n"
+            "现货上市前, 是资金布局的窗口\n\n"
+            "这三个你先看哪个? 👇\n"
+            "#BinanceAlpha")
+    main = ps.compose(head, items, tail)
+    thread = ("为什么是这三道筛?\n\n"
+              "已上合约 = 有真实资金在博弈\n\n"
+              "未上现货 = 现货上市前是布局窗口\n\n"
+              "大户控盘≥60% = 主力已经拿到筹码\n\n"
+              "三条同时满足的很少, 所以才值得单独列出来。")
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
             "label": "妖币观察池"}
 
 
 def compose_review():
-    """复盘类(晚间栏目): 谁涨了谁被打回原形。"""
+    """复盘类(晚间栏目)。风格同 post_style。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
     try:
         import x_chart
         x_chart.chart_review()
@@ -204,32 +218,90 @@ def compose_review():
     ups, downs = [], []
     for m in b.get('matches', [])[:5]:
         sym = m['symbol']
-        cur = t.get('oi_snap', {}).get(sym) or m.get('oi_notional') or 0
-        base = m.get('oi_notional') or 0
+        cur = t.get('oi_snap', {}).get(sym) or _oi(m)
+        base = _oi(m)
         if base > 0:
             chg = (cur / base - 1) * 100
             if chg >= 5:
-                ups.append(f"🔺 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M USDT)")
+                ups.append((sym, chg, base / 1e6, cur / 1e6))
             elif chg <= -5:
-                downs.append(f"🔻 {sym} 持仓{chg:+.0f}% ({base/1e6:.1f}M→{cur/1e6:.1f}M USDT)")
-    if not ups and not downs:
-        return None
-    hook = "今日Alpha雷达复盘: 谁在被主力加仓, 谁在被打回原形? 👇"
-    main_tweet = (hook + "\n\n"
-                  + ("\n".join(ups[:3]) + "\n" if ups else "")
-                  + ("\n".join(downs[:3]) if downs else "")
-                  + "\n\n持仓=资金态度, 不等于价格必涨\n#BinanceAlpha #Crypto")
-    thread2 = ("复盘逻辑:\n"
-               "▪ 持仓上升+价格横盘 = 主力悄悄布局\n"
-               "▪ 持仓暴增+价格急拉 = 已启动, 注意波动\n"
-               "▪ 持仓下降 = 资金撤退, 别接飞刀\n\n"
-               "明日观察池见早帖。")
-    return {"main": main_tweet, "thread": [thread2], "chart": "/var/lib/x-publisher/charts/review.png",
+                downs.append((sym, chg, base / 1e6, cur / 1e6))
+    n_up, n_down = len(ups), len(downs)
+    if n_up and not n_down:
+        head = f"{n_up} 个Alpha币被资金加仓\n钱在往哪走?"
+    elif n_down and not n_up:
+        head = f"{n_down} 个Alpha币遭资金撤退\n谁在被抛弃?"
+    elif n_up and n_down:
+        head = f"复盘: {n_up} 个加仓 · {n_down} 个撤退\n钱在换仓"
+    else:
+        head = "复盘: 持仓整体平稳\n没异动, 也是一种信号"
+    items = []
+    for sym, chg, b0, c0 in (ups[:2] + downs[:2])[:3]:
+        arrow = '🔺' if chg > 0 else '🔻'
+        items.append(f"{arrow} {sym}  {chg:+.0f}%\n{b0:.1f}M → {c0:.1f}M USDT")
+    if not items:
+        try:
+            cur = json.loads(Path('/var/lib/demon-radar/matches.json').read_text())
+        except Exception:
+            cur = []
+        for m in cur[:3]:
+            items.append(f"{m['symbol']}  持仓 {_oi(m)/1e6:.1f}M USDT")
+    tail = ("持仓上升 = 资金在布局\n"
+            "持仓下降 = 资金在撤退\n\n"
+            "明天早帖给新的观察池 👇\n"
+            "#BinanceAlpha")
+    main = ps.compose(head, items, tail)
+    thread = ("这两个数字怎么看?\n\n"
+              "持仓变动 ≥5% 才进这个榜\n\n"
+              "持仓涨 + 价格横盘 = 主力在悄悄建仓\n\n"
+              "持仓涨 + 价格急拉 = 已经启动, 波动会很大\n\n"
+              "持仓跌 = 资金走了, 别去接飞刀")
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
             "label": "每日复盘"}
 
 
+def _xlen(t):
+    """兼容旧调用; 实现已统一到 post_style.xlen。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    return ps.xlen(t)
+
+
+def compose_smart_live_x():
+    """「聪明钱刚扫货」X 版。与广场版同源(square_publish.smart_live_picks)。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    try:
+        import square_publish as _sp
+    except Exception:
+        return None
+    picks = _sp.smart_live_picks()
+    if not picks:
+        return None
+    head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
+    items = [f"🟢 {x['tag']}  {x['mc']/1e6:.2f}M$\n{x['n']} 笔买入 {x['amt']:.3g} {x['qsym']}"
+             for x in picks[:4]]
+    tail = ("钱包池 = 币安排行榜筛出的实盘赢家\n"
+            "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
+            "只列买入 —— 他们卖出是获利了结 👇\n"
+            "#Binance #MemeCoin")
+    main = ps.compose(head, items, tail)
+    thread = ("这个钱包池怎么来的?\n\n"
+              "币安官方排行榜里按三条硬指标筛:\n\n"
+              "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
+              "筛完只留几十个地址, 然后盯他们最新的链上成交。\n\n"
+              "只列买入 —— 卖出是获利了结, 买入才是新动作。")
+    return {'main': main, 'thread': [thread], 'chart': None, 'label': '聪明钱扫货'}
+
+
 def draft_today():
-    """生成今日草稿包(只发币安Alpha相关, 栏目化+Thread)。"""
+    """生成今日草稿包(妖币观察池 + 每日复盘)。
+
+    「聪明钱扫货」已移出 —— 它的内容是 SOL/BSC 小币(钱包池), 属 meme 内容,
+    现由 meme_publish 的草稿包发出。
+    """
     drafts = []
     for fn in (compose_scan_alpha, compose_review):
         try:
@@ -307,22 +379,32 @@ def main():
         if not drafts:
             print("今日无可发内容")
             return
+        import sys as _s
+        _s.path.insert(0, '/opt/alpha-radar')
+        import post_style as ps
         ts = time.strftime("%m-%d %H:%M UTC", time.gmtime())
-        parts = [f"📝 X发帖草稿 @ {ts}(发X时附上图片)"]
+        sent = 0
+        # 每栏一条消息(图 + 该栏全文) —— 与 meme 侧一致。
+        # 原来发"1 条文字 + N 条纯图", 用户得自己把图和文字对上, 看起来像"没有图"。
         for d in drafts:
-            parts.append("\n━━━ " + d['label'] + " ━━━")
-            parts.append("【主帖】\n" + d['main'])
-            if d.get('chart'):
-                parts.append("【配图】" + d['chart'])
-            for i, t in enumerate(d.get('thread', []), 1):
+            parts = [f"📝 X发帖草稿 · {d['label']} @ {ts}",
+                     "【主帖】\n" + d['main']]
+            for i, t in enumerate(d.get('thread') or [], 1):
                 parts.append(f"【跟帖{i}】\n" + t)
-        body = "\n\n".join(parts)
-        if tg_send(body):
-            sent = 0
-            for d in drafts:
-                if d.get("chart") and tg_send_photo(d["chart"], caption=d["label"] + " 配图(发X时附上)"):
-                    sent += 1
-            print(f"草稿已推 Telegram({len(drafts)}个栏目+{sent}张图), 复制主帖+跟帖, 长按存图后发X")
+            text = "\n\n".join(parts)
+            for w in ps.audit(d['main'], platform='x'):
+                print(f"[风格告警·x · {d['label']}] {w}")
+            for i, t in enumerate(d.get('thread') or [], 1):
+                for w in ps.audit(t, platform='x'):
+                    print(f"[风格告警·x · {d['label']} 跟帖{i}] {w}")
+            chart = Path(d['chart']) if d.get('chart') else None
+            if chart and chart.exists() and tg_send_photo(chart, text):
+                print(f"  {d['label']}: 已推 Telegram(带图 {chart.name})")
+                sent += 1
+            elif tg_send(text):
+                print(f"  {d['label']}: 已推 Telegram(纯文字 —— 出图失败)")
+                sent += 1
+        print(f"草稿已推 Telegram({sent}/{len(drafts)} 栏, 每栏一条 图+全文, 可直接照着发X)")
         return
 
     print(__doc__)

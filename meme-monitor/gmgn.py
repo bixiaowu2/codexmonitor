@@ -167,3 +167,103 @@ class Client:
         return {"status": status, "requests": self.requests, "errors": self.errors,
                 "enriched": enriched, "last_error": self.last_error,
                 "retry_at": self.backoff_until or None}
+
+
+def _addr(chain, value):
+    value = str(value or '').strip()
+    return value if str(chain).lower() == 'solana' else value.lower()
+
+
+def rank_items(data):
+    """Extract the token list from a /v1/market/rank response (tolerant of nesting)."""
+    if not isinstance(data, dict):
+        return []
+    inner = data.get('data', data)
+    if isinstance(inner, dict):
+        if isinstance(inner.get('rank'), list):
+            return inner['rank']
+        deeper = inner.get('data')
+        if isinstance(deeper, dict) and isinstance(deeper.get('rank'), list):
+            return deeper['rank']
+    return []
+
+
+def normalize_rank_item(item, internal_chain):
+    """Convert a GMGN market-rank item into a radar pair dict.
+
+    The rank endpoint carries the exact safety fields the radar otherwise reports
+    missing (buy_tax/sell_tax/honeypot/holders/lock). They are stored under
+    `gmgn_rank` for the safety merge step; discovery scoring uses the standard
+    price/liquidity/volume/market_cap fields only.
+    """
+    if not isinstance(item, dict) or not item.get('address'):
+        return None
+    chain = str(internal_chain).lower()
+    token = _addr(chain, item['address'])
+    exchange = item.get('exchange')
+    pair = _addr(chain, exchange) if exchange else token
+    p = {
+        'chain': chain,
+        'source': 'gmgn',
+        'address': token,
+        'symbol': item.get('symbol') or '?',
+        'name': item.get('name') or '',
+        'pair_address': pair,
+        'dex': '',
+        'url': 'https://gmgn.ai/' + gmgn_chain(chain) + '/token/' + token,
+        'created_at': _number(item.get('creation_timestamp')),
+        'price_usd': _number(item.get('price')),
+        'liquidity_usd': _number(item.get('liquidity')),
+        'market_cap': _number(item.get('market_cap')),
+        'fetched_at': time.time(),
+        'volume_1h': _number(item.get('volume')),
+        'buys_1h': _number(item.get('buys')),
+        'sells_1h': _number(item.get('sells')),
+        'endpoint': 'market_rank',
+        'gmgn_rank': {
+            'buy_tax': item.get('buy_tax'),
+            'sell_tax': item.get('sell_tax'),
+            'is_honeypot': item.get('is_honeypot'),
+            'is_renounced': item.get('is_renounced'),
+            'is_open_source': item.get('is_open_source'),
+            'lock_percent': item.get('lock_percent'),
+            'holder_count': item.get('holder_count'),
+            'top_10_holder_rate': item.get('top_10_holder_rate'),
+            'rug_ratio': item.get('rug_ratio'),
+            'smart_degen_count': item.get('smart_degen_count'),
+            'renowned_count': item.get('renowned_count'),
+            'bundler_rate': item.get('bundler_rate'),
+            'swaps': item.get('swaps'),
+            'checked_at': time.time(),
+        },
+    }
+    return p
+
+
+def trending_pairs(client, chains, limit=10):
+    """Fetch GMGN market-rank trending per chain as additional discovery pairs."""
+    out = []
+    health = {'status': 'disabled', 'requests': 0, 'errors': 0, 'pairs': 0, 'per_chain': {}}
+    if not client.enabled:
+        return out, health
+    for chain in chains:
+        chain = str(chain).lower()
+        if gmgn_chain(chain) not in SUPPORTED_CHAINS:
+            continue
+        try:
+            time.sleep(2.0)
+            data = client.trending(chain, interval='1h', limit=limit)
+            items = rank_items(data)
+            for item in items:
+                p = normalize_rank_item(item, chain)
+                if p:
+                    out.append(p)
+            health['per_chain'][chain] = {'count': len(items)}
+        except FetchError as exc:
+            health['per_chain'][chain] = {'error': exc.code}
+            health['errors'] += 1
+    health['pairs'] = len(out)
+    health['requests'] = client.requests
+    health['errors'] = client.errors
+    health['status'] = 'ok' if out else ('empty' if not health['errors'] else 'partial')
+    return out, health

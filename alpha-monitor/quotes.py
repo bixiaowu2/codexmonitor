@@ -5,6 +5,23 @@ from binance_official import ticker_quote
 
 MAX_AGE_MS = 180000
 
+# Reasons callers can use to distinguish data-quality states without inventing a price.
+#  - ticker_unavailable_or_invalid: ticker request itself failed (network, schema, 5xx).
+#  - ticker_stale_or_future: ticker responded but its lastPrice is older than MAX_AGE_MS
+#    or the closeTime is in the future, so it is unusable as a current quote.
+#  - ticker_stale_no_recent_trade: ticker responded and a 1m kline fallback was attempted
+#    but produced no traded minute inside the freshness window.  This is a real-market
+#    condition (the token has not traded recently), not an interface failure.  It must
+#    not be counted as a scan/partial error for non-position candidates.
+#  - minute_data_unavailable: 1m kline request itself failed; this is an interface error.
+#  - no_recent_traded_minute: 1m kline returned but contained no traded candle in window.
+REASON_TICKER_INVALID = 'ticker_unavailable_or_invalid'
+REASON_TICKER_STALE = 'ticker_stale_or_future'
+REASON_NO_RECENT_TRADE = 'ticker_stale_no_recent_trade'
+REASON_KLINE_INVALID = 'minute_data_unavailable'
+REASON_NO_TRADED_MINUTE = 'no_recent_traded_minute'
+
+
 def valid(quote, now):
     return bool(quote and num(quote.get('price')) is not None and quote['price'] > 0
                 and num(quote.get('time')) is not None
@@ -35,6 +52,7 @@ def get_quote(fetch, alpha_id, fallback=False):
     """Bounded public requests; callable fetch owns HTTP timeouts. No guessed ticker symbols."""
     symbol = alpha_id + 'USDT'
     diagnostic = {'symbol': symbol, 'reason': 'quote_unavailable'}
+    ticker_failed = False
     try:
         raw = fetch(ALPHA + '/ticker', {'symbol': symbol})
         # Binance's documented Alpha response has appeared both as a flat
@@ -54,16 +72,20 @@ def get_quote(fetch, alpha_id, fallback=False):
                  'provider': 'binance_alpha_official'}
         if valid(quote, time.time()):
             return quote, dict(diagnostic, reason='ok', source=quote['source'])
-        diagnostic['reason'] = 'ticker_stale_or_future'
+        diagnostic['reason'] = REASON_TICKER_STALE
     except Exception:
-        diagnostic['reason'] = 'ticker_unavailable_or_invalid'
+        ticker_failed = True
+        diagnostic['reason'] = REASON_TICKER_INVALID
     if fallback:
         try:
             q = minute_quote(fetch(ALPHA + '/klines', {'symbol': symbol, 'interval': '1m', 'limit': 4}), time.time())
             if q:
                 return q, dict(diagnostic, reason='ok', source=q['source'], last_quote_time=q['time'],
                                age_seconds=round(time.time()-q['time']/1000, 1))
-            diagnostic['fallback'] = 'no_recent_traded_minute'
+            # Ticker responded but no recent 1m traded candle: a real-market condition.
+            diagnostic['fallback'] = REASON_NO_TRADED_MINUTE
+            if not ticker_failed:
+                diagnostic['reason'] = REASON_NO_RECENT_TRADE
         except Exception:
-            diagnostic['fallback'] = 'minute_data_unavailable'
+            diagnostic['fallback'] = REASON_KLINE_INVALID
     return None, diagnostic

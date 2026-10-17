@@ -20,6 +20,14 @@ BUN = '/home/ubuntu/.bun/bin/bun'
 KEYFILE = Path('/etc/square-post.env')
 
 
+
+
+def _oi(m):
+    """baseline.json 的字段名中途从 `oi` 改成了 `oi_notional`, 旧文件仍是 `oi`。
+    两处 review 只读 `oi_notional` → 旧 baseline 全读到 0 → 复盘永远"无可发内容"。
+    这里兼容两种名字。"""
+    return m.get('oi_notional') or m.get('oi') or 0
+
 def api_key():
     k = os.environ.get('BINANCE_SQUARE_OPENAPI_KEY', '').strip()
     if k:
@@ -41,6 +49,9 @@ def run_script(script, args, timeout=180):
 
 
 def post_text(text, title=None):
+    import post_style as _ps
+    for _w in _ps.audit(text, platform='square'):
+        print(f'[风格告警·square] {_w}')
     args = ['--text', text]
     if title:
         args += ['--title', title]
@@ -48,6 +59,9 @@ def post_text(text, title=None):
 
 
 def post_image(text, images):
+    import post_style as _ps
+    for _w in _ps.audit(text, platform='square'):
+        print(f'[风格告警·square] {_w}')
     return run_script('post-image.mjs', ['--text', text, '--images', ','.join(images)])
 
 
@@ -72,8 +86,50 @@ def cashtag(symbol):
     return '$' + sym.upper()
 
 
+_ALPHA_CA = None
+
+
+def alpha_contracts():
+    """币安 Alpha 代币的合约地址集合(缓存 1 次/进程)。
+
+    为什么需要: 聪明钱/链上信号的 ticker 是 **DEX 代币**, 不是币安上币符号。
+    直接加 $ 会让 `$DOGE` 指向币安上的**狗狗币** —— 同名但完全不同的币。
+    错误的 cashtag 比没有更糟(会误导读者去点错币), 所以必须用**合约地址**核对:
+    只有该 DEX 代币的合约地址确实出现在币安 Alpha 名录里, 才认为它是同一个币、才加 $。
+    """
+    global _ALPHA_CA
+    if _ALPHA_CA is not None:
+        return _ALPHA_CA
+    out = set()
+    try:
+        import sys as _sys
+        _sys.path.insert(0, '/opt/alpha-radar')
+        from radar import PublicAPI, TOKENS
+        from binance_official import token_list
+        api = PublicAPI('/var/lib/demon-radar/bnsym-cache', ttl=1800)
+        tokens, _ = token_list(api.data(TOKENS, {}))
+        for t in tokens:
+            ca = str(t.get('contractAddress') or '').strip().lower()
+            if ca:
+                out.add(ca)
+    except Exception:
+        pass
+    _ALPHA_CA = out
+    return out
+
+
+def safe_cashtag(symbol, contract):
+    """只有**合约地址**对得上币安 Alpha 名录时才加 $; 否则原样返回符号。
+    (仅按 ticker 判断是不够的 —— 同名不同币太常见。)"""
+    ca = str(contract or '').strip().lower()
+    if ca and ca in alpha_contracts():
+        return cashtag(symbol)
+    return str(symbol or '')
+
+
 def compose_scan():
-    """观察池: 文字 + 集中度/持仓图。"""
+    """观察池: 文字 + 集中度/持仓图。风格见 post_style。"""
+    import post_style as ps
     try:
         m = json.loads((DATA / 'matches.json').read_text())
     except Exception:
@@ -81,7 +137,6 @@ def compose_scan():
     sa = [x for x in m if x.get('tier') in ('S', 'A')]
     if not sa:
         return None, []
-    # 生成配图
     try:
         import sys
         sys.path.insert(0, '/opt/alpha-radar')
@@ -89,25 +144,24 @@ def compose_scan():
         chart = x_chart.chart_scan()
     except Exception:
         chart = None
-    lines = [f'🔍 我扒了全部币安Alpha代币, 只有 {len(sa[:3])} 个同时满足这三个条件',
-             '',
-             '① 已上币安合约  ② 还没上现货  ③ 剔除LP后大户集中度≥60%',
-             '满足意味着: 主力已控盘, 现货上市前是资金布局窗口期。',
-             '',
-             f'{time.strftime("%m-%d", time.gmtime())} 观察池:']
-    for x in sa[:3]:
-        lines.append(f"• {cashtag(x['symbol'])} 清洗后集中度 {x['cleaned_top10']*100:.0f}% · 合约持仓 {x['oi_notional']/1e6:.1f}M USDT")
-    lines.append('')
-    lines.append('筛选逻辑: 已上币安合约 + 未上现货 + 剔除LP后大户集中度≥60%')
-    lines.append('点击上方币种可查看实时行情与合约数据。')
-    lines.append('数据筛选, 不构成投资建议。')
-    text = '\n'.join(lines)
+    picks = sa[:3]
+    head = f"我扒了全部币安Alpha代币\n只有 {len(picks)} 个同时过三道筛"
+    items = [f"{'🥇🥈🥉'[i]} {safe_cashtag(x['symbol'], x.get('address'))}  控盘 {x['cleaned_top10']*100:.0f}%\n"
+             f"合约持仓 {x['oi_notional']/1e6:.1f}M USDT"
+             for i, x in enumerate(picks)]
+    tail = ("三道筛: 已上合约 · 未上现货 · 大户控盘≥60%\n"
+            "现货上市前, 是资金布局的窗口\n\n"
+            "这三个你先看哪个?\n\n"
+            "点击币种可看实时行情与合约数据。\n"
+            "数据筛选, 不构成投资建议。")
+    text = ps.compose(head, items, tail, limit=2000)
     imgs = [str(chart)] if chart and Path(chart).exists() else []
     return text, imgs
 
 
 def compose_review():
-    """复盘: 文字 + 持仓变化图。"""
+    """复盘: 文字 + 持仓变化图。风格见 post_style。"""
+    import post_style as ps
     try:
         b = json.loads((DATA / 'baseline.json').read_text())
         t = json.loads((DATA / 'track_state.json').read_text())
@@ -123,30 +177,56 @@ def compose_review():
     ups, downs = [], []
     for m in b.get('matches', [])[:5]:
         sym = m['symbol']
-        cur = t.get('oi_snap', {}).get(sym) or m.get('oi_notional') or 0
-        base = m.get('oi_notional') or 0
+        cur = t.get('oi_snap', {}).get(sym) or _oi(m)
+        base = _oi(m)
         if base > 0:
             chg = (cur / base - 1) * 100
             if chg >= 5:
-                ups.append(f"🔺 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M -> {cur/1e6:.1f}M USDT)")
+                ups.append((sym, chg, base / 1e6, cur / 1e6, m.get('address')))
             elif chg <= -5:
-                downs.append(f"🔻 {cashtag(sym)} 持仓 {chg:+.0f}% ({base/1e6:.1f}M -> {cur/1e6:.1f}M USDT)")
-    if not ups and not downs:
-        return None, []
-    _up = len(ups)
-    _down = len(downs)
-    if _up and not _down:
-        _hook = f'📈 昨天 {_up} 个Alpha币被悄悄加仓 — 资金在往哪走?'
-    elif _down and not _up:
-        _hook = f'📉 昨天 {_down} 个Alpha币遭资金撤退 — 谁在被抛弃?'
+                downs.append((sym, chg, base / 1e6, cur / 1e6, m.get('address')))
+    n_up, n_down = len(ups), len(downs)
+    if n_up and not n_down:
+        head = f"{n_up} 个Alpha币被资金加仓\n钱在往哪走?"
+    elif n_down and not n_up:
+        head = f"{n_down} 个Alpha币遭资金撤退\n谁在被抛弃?"
+    elif n_up and n_down:
+        head = f"复盘: {n_up} 个加仓 · {n_down} 个撤退\n钱在换仓"
     else:
-        _hook = f'📊 Alpha雷达复盘: {_up} 个加仓 · {_down} 个撤退'
-    lines = [_hook, '',
-             f'{time.strftime("%m-%d", time.gmtime())} 合约持仓变化:']
-    lines += (ups[:2] + downs[:1])[:3]  # cashtag 上限3
-    lines.append('')
-    lines.append('持仓上升=资金布局, 持仓下降=资金撤退。数据筛选, 不构成投资建议。')
-    text = '\n'.join(lines)
+        head = "复盘: 持仓整体平稳\n没异动, 也是一种信号"
+    # 币安广场单帖 cashtag 服务端上限 3 个(超出报 220095 Coin pair count), 按剩余名额挂。
+    used = 0
+    items = []
+    for sym, chg, b0, c0, addr in (ups[:2] + downs[:1])[:3]:
+        arrow = '🔺' if chg > 0 else '🔻'
+        tag = safe_cashtag(sym, addr)          # 用该币自己的合约地址, 不是循环泄漏的 m
+        if tag.startswith('$'):
+            used += 1
+        items.append(f"{arrow} {tag}  {chg:+.0f}%\n{b0:.1f}M → {c0:.1f}M USDT")
+    if not items:
+        items.append("较上一基线无 ±5% 以上变动")
+    try:
+        cur = json.loads((DATA / 'matches.json').read_text())
+    except Exception:
+        cur = []
+    if cur:
+        pool = ["📌 当前观察池"]
+        for m in cur[:5]:
+            cand = safe_cashtag(m['symbol'], m.get('address'))
+            if cand.startswith('$'):
+                if used >= 3:
+                    cand = m['symbol']      # 名额用完, 退回纯符号
+                else:
+                    used += 1
+            ct = m.get('cleaned_top10')
+            ct_s = f"  控盘 {ct*100:.0f}%" if ct else ''
+            pool.append(f"{cand}  持仓 {_oi(m)/1e6:.1f}M USDT{ct_s}")
+        items.append('\n'.join(pool))
+    tail = ("持仓上升 = 资金在布局\n"
+            "持仓下降 = 资金在撤退\n\n"
+            "明天早帖给新的观察池。\n"
+            "数据筛选, 不构成投资建议。")
+    text = ps.compose(head, items, tail, limit=2000)
     imgs = [str(chart)] if chart and Path(chart).exists() else []
     return text, imgs
 
@@ -169,7 +249,7 @@ def compose_signal(ev):
     sym = ev.get('symbol', '')
     futs = ev.get('futures', sym + 'USDT')
     title = SIGNAL_TITLE.get(kind, '📊 雷达信号')
-    tag = cashtag(sym)
+    tag = safe_cashtag(sym, ev.get('address'))   # 事件里的地址在 ev 上, 这里没有 m
     raw = str(ev.get('text', ''))
     # 去掉内部标题行(第一行), 保留说明部分
     body = raw.split('\n', 1)[1].strip() if '\n' in raw else raw
@@ -233,9 +313,95 @@ def post_signals(max_posts=3):
     print(f'本轮发送 {sent} 条信号帖')
 
 
-def compose_smart_money():
-    """聪明钱买入榜。注意: 币安广场对单帖 cashtag 数量有服务端上限(实测>3会报220095),
-    故全帖最多 3 个 cashtag: 刚触发 top2 + 已兑现 top1。"""
+def smart_live_picks(max_mc=50e6, size=50):
+    """自建钱包池的最新链上**买入**, 已按成交额降序。返回 [{sym, cn, qsym, amt, mc, tag}]。
+
+    数据源: 币安官方链上追踪 address-tracker/trades (trackerType=1 = 我们建的钱包池)。
+    方向: 只保留买入 —— tradeType 3/5 已用链上 Transfer 事件反推确认(见 T3.1)。
+    市值上限: 读者要的是"还没涨起来的", 报一个 35 亿的成熟币没意义。
+    """
+    import sys as _sys
+    _sys.path.insert(0, '/opt/alpha-radar')
+    try:
+        import web3_client as _w3
+    except Exception:
+        return []
+
+    TT_BUY = {'3', '5'}
+    CH = {'56': ('BSC', 'BNB'), 'CT_501': ('SOL', 'SOL')}
+    seen_tx = set()
+    agg = {}
+    for cid, (cn, qsym) in CH.items():
+        try:
+            d = _w3.call('GET', '/api/v1/dex/market/address-tracker/trades',
+                         {'binanceChainId': cid, 'trackerType': '1', 'page': 1, 'size': size})
+        except Exception:
+            continue
+        for t in (d or {}).get('trades') or []:
+            if str(t.get('tradeType')) not in TT_BUY:
+                continue
+            tx = str(t.get('txHash') or '')
+            if tx:
+                if tx in seen_tx:          # 接口会给重复行, 不去重会重复计数
+                    continue
+                seen_tx.add(tx)
+            amt = _f(t.get('quoteTokenAmount'))
+            mc = _f(t.get('marketCap'))
+            if not amt or not mc or mc > max_mc:
+                continue
+            ca = str(t.get('tokenContractAddress') or '').lower()
+            sym = t.get('tokenSymbol') or '?'
+            k = ca or f'{cn}:{sym.lower()}'
+            if k in agg:
+                agg[k]['amt'] += amt
+                agg[k]['n'] += 1
+                agg[k]['mc'] = mc          # 市值取最新
+            else:
+                agg[k] = {'sym': sym, 'cn': cn, 'qsym': qsym, 'amt': amt, 'n': 1, 'mc': mc,
+                          'tag': safe_cashtag(sym, t.get('tokenContractAddress'))}
+    out = list(agg.values())
+    out.sort(key=lambda x: -x['amt'])
+    return out
+
+
+def compose_smart_live():
+    """新栏目「聪明钱刚买了什么」—— 来自币安官方链上追踪(address-tracker/trades)。
+
+    与已有的「聪明钱买入榜」不同: 那个是 trading-signal 的每笔信号;
+    这个是**我们自建的钱包池**(币安排行榜筛出: 胜率>=55% 且 已实现盈亏>=1万$ 且 交易数>=20)
+    的**最新链上成交**, 且带买卖方向(方向由链上 Transfer 事件反推:
+    钱包在 to=买入 / 在 from=卖出)。
+
+    只取买入 —— "聪明钱刚买了什么"才有信息量; 卖出是他们的获利了结, 对读者参考价值低。
+    """
+    import post_style as ps
+    picks = smart_live_picks()
+    if not picks:
+        return None, []
+    head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
+    items = [f"🟢 {x['tag']}  {x['mc']/1e6:.2f}M$\n{x['n']} 笔买入 {x['amt']:.3g} {x['qsym']}"
+             for x in picks[:4]]
+    tail = ("钱包池 = 币安官方排行榜筛出的实盘赢家\n"
+            "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
+            "只列买入 —— 他们卖出是获利了结。\n"
+            "数据筛选, 不构成投资建议。")
+    return ps.compose(head, items, tail, limit=2000), []
+
+
+def _f(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def smart_money_picks():
+    """币安 trading-signal 的聪明钱**买入**信号 → 按币聚合。
+
+    返回 {'fresh': [...], 'done': [...], 'hook': {...}} 或 None。
+    fresh = 刚触发还没怎么涨的; done = 已兑现(信号历史战绩)。
+    抽出来供两个 composer 共用(广场版 + X 版), 数据逻辑只写一份。
+    """
     try:
         import bn_skills
     except Exception:
@@ -269,10 +435,10 @@ def compose_smart_money():
         k = t.lower()
         if k not in best or cnt(r) > cnt(best[k]):
             best[k] = r
-    items = list(best.values())
+    pool = list(best.values())
 
     fresh, done = [], []
-    for r in items:
+    for r in pool:
         g = gain(r)
         if g is None:
             continue
@@ -283,30 +449,42 @@ def compose_smart_money():
     fresh.sort(key=lambda r: -cnt(r))
     done.sort(key=lambda r: -(gain(r) or 0))
 
-    lines = []
-    hook = fresh[0] if fresh else (done[0] if done else (items[0] if items else None))
-    if hook is not None:
-        lines.append(f'🐋 聪明钱刚刚扫货: {cnt(hook)} 个地址同时买入同一个币')
-        lines.append('')
+    hook = fresh[0] if fresh else (done[0] if done else (pool[0] if pool else None))
+    if hook is None:
+        return None
+    return {'fresh': fresh, 'done': done, 'hook': hook, 'cnt': cnt, 'gain': gain}
+
+
+def compose_smart_money():
+    """广场版: 注意 cashtag 服务端上限 3 个(实测>3 报 220095)。风格见 post_style。"""
+    import post_style as ps
+    d = smart_money_picks()
+    if not d:
+        return None, []
+    fresh, done, hook, cnt, gain = d['fresh'], d['done'], d['hook'], d['cnt'], d['gain']
+    head = f"聪明钱刚扫货\n{cnt(hook)} 个地址同时买入同一个币"
     used = 0
+    items = []
     if fresh:
-        lines.append('🟢 刚触发(还没怎么涨, 可重点关注):')
+        block = ["🟢 刚触发(还没怎么涨)"]
         for r in fresh[:2]:
             if used >= 3:
                 break
-            g = gain(r)
-            lines.append(f'• {cashtag(r.get("ticker"))} · {cnt(r)} 人买入 触发后 {g:+.0f}%')
+            block.append(f"{safe_cashtag(r.get('ticker'), r.get('contractAddress'))}  "
+                         f"{cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
             used += 1
-        lines.append('')
+        items.append('\n'.join(block))
     if done and used < 3:
-        lines.append('🔥 已兑现(信号历史战绩):')
+        block = ["🔥 已兑现(信号历史战绩)"]
         for r in done[:3 - used]:
-            lines.append(f'• {cashtag(r.get("ticker"))} · {cnt(r)} 人买入 (触发后 {gain(r):+.0f}%)')
+            block.append(f"{safe_cashtag(r.get('ticker'), r.get('contractAddress'))}  "
+                         f"{cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
             used += 1
-        lines.append('')
-    lines += ['聪明钱=链上被持续跟踪的专业地址, 他们买什么往往先于市场热度。',
-              '点击币种可查看实时行情。数据筛选, 不构成投资建议。']
-    return '\n'.join(lines), []
+        items.append('\n'.join(block))
+    tail = ("聪明钱 = 链上被持续跟踪的专业地址\n"
+            "他们买什么, 往往先于市场热度\n\n"
+            "数据筛选, 不构成投资建议。")
+    return ps.compose(head, items, tail, limit=2000), []
 
 
 def main():
@@ -316,11 +494,20 @@ def main():
     ap.add_argument('--test', action='store_true')
     ap.add_argument('--signal', action='store_true', help='消费信号队列发广场')
     ap.add_argument('--smart-money', action='store_true', help='发聪明钱买入榜')
+    ap.add_argument('--smart-live', action='store_true', help='发聪明钱最新买入(链上追踪)')
     ap.add_argument('--text', type=str)
     args = ap.parse_args()
 
     if not api_key():
         print('缺少 BINANCE_SQUARE_OPENAPI_KEY(env 或 /etc/square-post.env)')
+        return
+
+    if getattr(args, 'smart_live', False):
+        text, imgs = compose_smart_live()
+        if not text:
+            print('无聪明钱买入记录'); return
+        code, out = post_text(text)
+        print('Success' if 'Success' in out else out.strip()[:200])
         return
 
     if args.smart_money:

@@ -5,6 +5,8 @@ from pathlib import Path
 sys.path.insert(0, "/opt/alpha-radar")
 from radar import PublicAPI, FUTURES, num
 import urllib.request
+import types
+import dingtalk
 
 DATA = Path("/var/lib/demon-radar")
 STATE = DATA / "review_state.json"
@@ -27,6 +29,18 @@ def tg(token, chat, text):
     req = urllib.request.Request("https://api.telegram.org/bot" + token + "/sendMessage",
                                  data=body, headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req, timeout=15).read()
+
+def dingtalk_send(env, text):
+    if env.get("DINGTALK_ENABLED", "false").strip().lower() != "true":
+        return
+    cfg = types.SimpleNamespace(
+        ding_webhook=secret(env, "DINGTALK_WEBHOOK"),
+        ding_secret=secret(env, "DINGTALK_SECRET"),
+        ding_keyword=env.get("DINGTALK_KEYWORD", "Alpha雷达").strip(),
+    )
+    if not cfg.ding_webhook:
+        return
+    dingtalk.send(cfg, text)
 
 def snap(api, m):
     sym = m["symbol"]
@@ -101,14 +115,51 @@ def main():
     body += "\n\n当前:\n" + "\n".join(summary)
     print(body)
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
-    if token and chat and (alerts or time.time() - state.get("last", 0) > 2 * 86400):
+    if alerts or time.time() - state.get("last", 0) > 2 * 86400:
+        if token and chat:
+            try:
+                tg(token, chat, body)
+                print("telegram: 复盘已推")
+            except Exception as e:
+                print("tg 失败:", str(e)[:100])
         try:
-            tg(token, chat, body)
-            state["last"] = time.time()
-            STATE.write_text(json.dumps(state))
-            print("telegram: 复盘已推")
+            dingtalk_send(env, body)
+            print("dingtalk: 复盘已推")
         except Exception as e:
-            print("tg 失败:", str(e)[:100])
+            print("钉钉失败:", str(e)[:100])
+        state["last"] = time.time()
+        STATE.write_text(json.dumps(state))
+
+    # 用完基线后把它推进到当天 —— 否则 baseline.json 是孤儿文件(没有任何程序写它),
+    # 复盘会永远跟两天前比。同时写 oi 与 oi_notional 两个键, 上下游字段名不一致。
+    try:
+        cur = json.loads((DATA / "matches.json").read_text())
+        top10 = {m["symbol"]: m.get("top10") for m in cur}
+        snap_rows, seen = [], set()
+        for r in rows:
+            if r["symbol"] in seen:
+                continue
+            seen.add(r["symbol"])
+            v = r.get("oi")
+            snap_rows.append({"symbol": r["symbol"], "top10": top10.get(r["symbol"]),
+                              "oi": v, "oi_notional": v, "fr": r.get("fr"),
+                              "price": r.get("price"), "chg24h": r.get("chg24h")})
+        # 最小间隔: 基线最多每 12h 推进一次。否则每次运行都推进, 基线贴着"现在",
+        # 复盘就永远比不出变化(恒 0% → 贴文永远为空)。
+        try:
+            prev_ts = float(json.loads((DATA / "baseline.json").read_text()).get("ts_epoch") or 0)
+        except Exception:
+            prev_ts = 0
+        if snap_rows and time.time() - prev_ts >= 12 * 3600:
+            (DATA / "baseline.json").write_text(json.dumps(
+                {"ts": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+                 "ts_epoch": time.time(), "matches": snap_rows},
+                ensure_ascii=False, indent=2))
+            print(f"baseline: 已推进({len(snap_rows)} 只, 距上次 {int((time.time()-prev_ts)/3600)}h)")
+        else:
+            print(f"baseline: 未推进(距上次仅 {int((time.time()-prev_ts)/3600)}h, 不足 12h)")
+    except Exception as e:
+        print("baseline 更新失败:", str(e)[:100])
 
 if __name__ == "__main__":
     main()

@@ -14,3 +14,18 @@ def grouped_rows(rows):
 
 def market_label(row):
     return market_group(row)
+
+# 推送里按这个顺序分段(用户习惯: A股 → 港股 → 美股)
+MARKET_ORDER = ('A股', '港股', '美股', '韩股', '其他市场')
+
+
+def market_of(symbol):
+    """按 symbol 后缀判市场。与 stock_scan 的 mkt_of 口径一致, 只是提到这里共用。"""
+    sym = str(symbol or '').upper()
+    if sym.endswith(('.SS', '.SZ', '.BJ')):
+        return 'A股'
+    if sym.endswith('.HK'):
+        return '港股'
+    if '.KS' in sym:
+        return '韩股'
+    return '美股'
