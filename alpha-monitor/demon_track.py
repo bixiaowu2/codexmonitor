@@ -20,6 +20,8 @@ DATA = Path('/var/lib/demon-radar')
 MATCHES = DATA / 'matches.json'
 STATE = DATA / 'track_state.json'
 DRAWDOWN_PCT = 0.25
+DRAWDOWN_STEP = 0.10          # 回撤再扩大 10 个百分点才追发
+DRAWDOWN_COOLDOWN = 6 * 3600  # 或至少间隔 6 小时
 FR_NEG = -0.001
 OI_SURGE = 1.30
 TP1 = 3.0   # 第一档止盈倍数
@@ -148,6 +150,8 @@ def main():
         except Exception:
             state = {}
     drawn = set(state.get('drawn_symbols', []))
+    drawn_dd = dict(state.get('drawn_dd', {}))
+    drawn_ts = dict(state.get('drawn_ts', {}))
     fr_alerted = set(state.get('fr_alerted', []))
     oi_snap = state.get('oi_snap', {})
     tp_hit = set(state.get('tp_hit', []))
@@ -167,31 +171,38 @@ def main():
                 if mult >= TP2 and sym + ':tp2' not in tp_hit:
                     _msg = f"💰 第二档止盈 · {sym}\n较候选基准价(合约首日收盘) {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议再出 1/3 锁定利润, 剩 1/3 博更高。"
                     alerts.append(_msg)
-                    sq_events.append({"kind": "止盈2", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
+                    sq_events.append({"kind": "止盈2", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "mult": mult, "price": last, "base": first, "address": m.get('address')})
                     tp_hit.add(sym + ':tp2')
                 elif mult >= TP1 and sym + ':tp1' not in tp_hit:
                     _msg = f"💰 第一档止盈 · {sym}\n较候选基准价(合约首日收盘) {first:.6g} 已涨 {mult:.1f}x (现价 {last:.6g})。\n建议出 1/3 锁定利润, 剩 2/3 继续持有。"
                     alerts.append(_msg)
-                    sq_events.append({"kind": "止盈1", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
+                    sq_events.append({"kind": "止盈1", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "mult": mult, "price": last, "base": first, "address": m.get('address')})
                     tp_hit.add(sym + ':tp1')
             # A. 回撤(瀑布预警, 25%)
             if peak and last:
                 dd = (peak - last) / peak
                 if dd >= DRAWDOWN_PCT:
-                    if sym not in drawn:
+                    _last_dd = drawn_dd.get(sym, 0.0)
+                    _last_ts = drawn_ts.get(sym, 0.0)
+                    _deepened = (dd - _last_dd) >= DRAWDOWN_STEP
+                    _cooled = (time.time() - _last_ts) >= DRAWDOWN_COOLDOWN
+                    if sym not in drawn or _deepened or _cooled:
                         _msg = f"⚠️ 回撤预警 · {sym}\n从3日高点 {peak:.6g} 回落 {dd*100:.1f}% 至 {last:.6g}。瀑布或已开始, 注意止损/止盈。"
                         alerts.append(_msg)
-                        sq_events.append({"kind": "回撤", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
+                        sq_events.append({"kind": "回撤", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "peak": peak, "last": last, "drop_pct": dd, "address": m.get('address')})
                         drawn.add(sym)
+                        drawn_dd[sym] = dd
+                        drawn_ts[sym] = time.time()
                 else:
                     drawn.discard(sym)
+                    drawn_dd.pop(sym, None)
         frs = fetch_funding(api, futs)
         if frs:
             cur = frs[-1]
             if cur is not None and cur < FR_NEG and sym not in fr_alerted:
                 _msg = f"🚀 启动信号 · {sym}\n资金费率转负 {cur*100:.3f}%, 可能逼空拉升。"
                 alerts.append(_msg)
-                sq_events.append({"kind": "启动", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
+                sq_events.append({"kind": "启动", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "rate": cur, "price": last, "address": m.get('address')})
                 fr_alerted.add(sym)
         oi = fetch_oi(api, futs)
         prev = oi_snap.get(sym)
@@ -199,10 +210,10 @@ def main():
             if prev and prev > 0 and oi > prev * OI_SURGE:
                 _msg = f"📈 持仓异动 · {sym}\n合约持仓 {oi/1e6:.1f}M, 较前期 {prev/1e6:.1f}M 增 {oi/prev-1:+.1%}。"
                 alerts.append(_msg)
-                sq_events.append({"kind": "持仓", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time()})
+                sq_events.append({"kind": "持仓", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "oi": oi, "prev": prev, "address": m.get('address')})
             oi_snap[sym] = oi
 
-    state.update({'drawn_symbols': list(drawn), 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
+    state.update({'drawn_symbols': list(drawn), 'drawn_dd': drawn_dd, 'drawn_ts': drawn_ts, 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
     STATE.write_text(json.dumps(state, ensure_ascii=False))
     if sq_events:
         with (DATA / 'square_queue.jsonl').open('a', encoding='utf-8') as _qf:

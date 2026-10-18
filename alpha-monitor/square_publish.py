@@ -243,19 +243,128 @@ SIGNAL_TITLE = {
 }
 
 
+def _num(v):
+    """安全转 float；拿不到就返回 None。"""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _signal_body(ev, tag):
+    """按信号类型生成结构化文案。
+
+    优先用事件里的结构化字段；字段缺失(旧事件)返回 None, 由调用方退回原行为。
+    风格依据 post_style: 首行钩子 / 第一人称 / 具体数字 / 结尾开放循环。
+    """
+    kind = ev.get('kind', '')
+
+    if kind == '启动':
+        rate = _num(ev.get('rate'))
+        if rate is None:
+            return None
+        return (
+            f"{tag} 资金费率刚转负 {rate * 100:.2f}%\n"
+            "\n"
+            "空头开始付钱给多头。\n"
+            "\n"
+            "我盯的 Alpha 池里\n"
+            "这是最新一个转负的\n"
+            "\n"
+            "费率转负不等于马上涨\n"
+            "它说明多空分歧在加大\n"
+            "\n"
+            "这种时候你会上车吗？👇"
+        )
+
+    if kind == '回撤':
+        peak = _num(ev.get('peak'))
+        last = _num(ev.get('last'))
+        dd = _num(ev.get('drop_pct'))
+        if peak is None or last is None or dd is None:
+            return None
+        return (
+            f"{tag} 三天从 {peak:.6g} 到 {last:.6g}\n"
+            f"回撤 {dd * 100:.1f}%\n"
+            "\n"
+            "这个速度不是回调\n"
+            "是杠杆在连环爆\n"
+            "\n"
+            "我盯的池子里\n"
+            "它是跌得最快的一个\n"
+            "\n"
+            "快跌之后通常两种走法：\n"
+            "横盘消化，或者继续瀑布\n"
+            "\n"
+            "区别在今晚的成交量\n"
+            "你怎么看？👇"
+        )
+
+    if kind in ('止盈1', '止盈2'):
+        mult = _num(ev.get('mult'))
+        price = _num(ev.get('price'))
+        if mult is None:
+            return None
+        tier = '第一档' if kind == '止盈1' else '第二档'
+        px = f"现价 {price:.6g}\n" if price is not None else ''
+        return (
+            f"{tag} 较基准价已经 {mult:.1f}x\n"
+            f"{px}"
+            "\n"
+            f"我的{tier}止盈信号触发了\n"
+            "\n"
+            "翻倍之后最容易犯的错\n"
+            "是舍不得卖\n"
+            "\n"
+            "分批止盈是纪律\n"
+            "不是判断 ——\n"
+            "\n"
+            "你会怎么处理这一档？👇"
+        )
+
+    if kind == '持仓':
+        oi = _num(ev.get('oi'))
+        prev = _num(ev.get('prev'))
+        if oi is None or not prev:
+            return None
+        return (
+            f"{tag} 合约持仓 {oi / 1e6:.1f}M\n"
+            f"较前期 {prev / 1e6:.1f}M 增 {oi / prev - 1:+.1%}\n"
+            "\n"
+            "钱在往这个币里加。\n"
+            "\n"
+            "我看的是持仓增速\n"
+            "不是价格\n"
+            "\n"
+            "持仓先动，价格后动 ——\n"
+            "\n"
+            "你盯过这个信号吗？👇"
+        )
+
+    return None
+
+
 def compose_signal(ev):
-    """把 demon-track 的信号事件转成广场帖(带 cashtag + 走势图)。"""
+    """把 demon-track 的信号事件转成广场帖(带 cashtag + 走势图)。
+
+    有结构化字段时走 _signal_body（第一人称 + 钩子 + 开放循环）;
+    没有(旧事件)则退回原来的「标题行 + 原文案」。
+    """
     kind = ev.get('kind', '其他')
     sym = ev.get('symbol', '')
     futs = ev.get('futures', sym + 'USDT')
-    title = SIGNAL_TITLE.get(kind, '📊 雷达信号')
     tag = safe_cashtag(sym, ev.get('address'))   # 事件里的地址在 ev 上, 这里没有 m
-    raw = str(ev.get('text', ''))
-    # 去掉内部标题行(第一行), 保留说明部分
-    body = raw.split('\n', 1)[1].strip() if '\n' in raw else raw
-    lines = [f'{title} · {tag}', body, '',
-             '点击上方币种可查看实时行情。数据筛选, 不构成投资建议。']
-    text = '\n'.join([x for x in lines if x is not None])
+
+    body = _signal_body(ev, tag)
+    if body is None:
+        title = SIGNAL_TITLE.get(kind, '📊 雷达信号')
+        raw = str(ev.get('text', ''))
+        # 去掉内部标题行(第一行), 保留说明部分
+        old = raw.split('\n', 1)[1].strip() if '\n' in raw else raw
+        body = f'{title} · {tag}\n{old}'
+
+    lines = [body, '', '点击上方币种可查看实时行情。数据筛选, 不构成投资建议。']
+    text = '\n\n'.join(x for x in lines if x)
     chart = None
     try:
         import sys
