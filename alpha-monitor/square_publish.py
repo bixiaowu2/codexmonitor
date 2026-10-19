@@ -48,6 +48,19 @@ def run_script(script, args, timeout=180):
     return r.returncode, (r.stdout or '') + (r.stderr or '')
 
 
+def _relay_square(text, kind='帖子'):
+    """广场发帖成功后，同步到群（内容 bot）。失败不影响主流程。"""
+    try:
+        import sys as _s
+        _s.path.insert(0, '/opt/content-push')
+        import relay
+        body = f'📮 [广场] 已自动发布 · {kind}\n\n' + text[:900]
+        relay.send(body)
+        print('  已同步到群')
+    except Exception as e:
+        print(f'  同步到群失败: {str(e)[:80]}')
+
+
 def post_text(text, title=None):
     import post_style as _ps
     for _w in _ps.audit(text, platform='square'):
@@ -55,14 +68,20 @@ def post_text(text, title=None):
     args = ['--text', text]
     if title:
         args += ['--title', title]
-    return run_script('post-text.mjs', args)
+    code, out = run_script('post-text.mjs', args)
+    if 'Success' in (out or ''):
+        _relay_square(text)
+    return code, out
 
 
 def post_image(text, images):
     import post_style as _ps
     for _w in _ps.audit(text, platform='square'):
         print(f'[风格告警·square] {_w}')
-    return run_script('post-image.mjs', ['--text', text, '--images', ','.join(images)])
+    code, out = run_script('post-image.mjs', ['--text', text, '--images', ','.join(images)])
+    if 'Success' in (out or ''):
+        _relay_square(text, '图文帖')
+    return code, out
 
 
 def cashtag(symbol):

@@ -455,6 +455,24 @@
       "reviewed_at": "2026-09-26",
       "track_record": "not_backtested",
       "score_weight": 0
+    },
+    {
+      "category": "market_commentator",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "enabled": true,
+      "evidence": [
+        "https://x.com/laoyingkhq"
+      ],
+      "handle": "laoyingkhq",
+      "interval_seconds": 900,
+      "priority": 10,
+      "reason": "鹰哥 — 中文加密交易者，Polymarket 相关，互动率高（实测 1.2%）",
+      "reviewed_at": "2026-10-18",
+      "score_weight": 0,
+      "track_record": "not_backtested"
     }
   ]
 }

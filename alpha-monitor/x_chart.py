@@ -28,13 +28,15 @@ for fp in ('/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',):
 plt.rcParams['axes.unicode_minus'] = False
 
 # 深色主题(X 加密审美)
-BG = '#0d1117'
-FG = '#e6edf3'
-GRID = '#21262d'
-GOLD = '#f0b90b'   # 币安金
-RED = '#f85149'
-GREEN = '#3fb950'
-BLUE = '#58a6ff'
+BG = '#0B0E14'
+FG = '#F5F5F2'
+MUTED = '#8A8A84'
+GRID = '#1A1F2B'
+GOLD = '#F0B90B'   # 币安金
+RED = '#F87171'
+GREEN = '#34D399'
+CYAN = '#22D3EE'
+BLUE = '#58A6FF'
 
 
 def _style(ax):
@@ -47,6 +49,8 @@ def _style(ax):
 
 def _save(fig, name):
     CHARTS.mkdir(parents=True, exist_ok=True)
+    fig.text(0.995, 0.005, '@bidafa1801919', ha='right', va='bottom',
+             color=MUTED, fontsize=9, alpha=0.85)
     path = CHARTS / name
     fig.savefig(path, dpi=150, facecolor=BG, bbox_inches='tight')
     plt.close(fig)
@@ -86,6 +90,8 @@ def chart_scan():
                  va='center', ha='left', color=FG, fontsize=11)
     ax2.set_xlim(0, max(oi) * 1.25)
 
+    fig.text(0.01, 0.01, '三道筛：已上合约 · 未上现货 · 大户控盘≥60%',
+             color=MUTED, fontsize=9.5)
     return _save(fig, 'scan.png')
 
 
@@ -127,6 +133,8 @@ def chart_meme():
         ax2.text(v, i, f' {v:.0f}%', va='center', ha='left', color=FG, fontsize=10)
     ax2.set_xlim(0, (max(conc) or 1) * 1.25)
 
+    fig.text(0.01, 0.01, 'S=金色 / A=蓝色 · 集中度越低筹码越散',
+             color=MUTED, fontsize=9.5)
     return _save(fig, 'meme.png')
 
 
@@ -284,6 +292,8 @@ def chart_review():
                        Patch(color=GREEN, label='当前持仓 ↑ 加仓'),
                        Patch(color=RED, label='当前持仓 ↓ 撤退')],
               facecolor=BG, edgecolor=GRID, labelcolor=FG, loc='lower right')
+    fig.text(0.01, 0.01, '持仓上升 = 资金在布局　持仓下降 = 资金在撤退',
+             color=MUTED, fontsize=9.5)
     return _save(fig, 'review.png')
 
 
@@ -306,6 +316,8 @@ def chart_signal(symbol, futures_sym):
     ax.set_title(f'{symbol} 近7日价格 (1h) · 启动信号触发', color=FG, fontsize=14)
     _style(ax)
     ax.grid(axis='y', color=GRID, linewidth=0.6)
+    fig.text(0.01, 0.01, '启动 ≠ 上涨，只说明资金费率转负',
+             color=MUTED, fontsize=9.5)
     return _save(fig, f'signal_{symbol}.png')
 
 

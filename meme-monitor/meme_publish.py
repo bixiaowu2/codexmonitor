@@ -72,7 +72,8 @@ def tg_send_photo(path, caption=""):
     """用 meme 自己的 bot 发图(配图草稿)。"""
     import urllib.request, uuid
     token = secret(os.environ, 'MEME_TELEGRAM_BOT_TOKEN')
-    chat = secret(os.environ, 'MEME_TELEGRAM_CHAT_ID')
+    chat = (secret(os.environ, 'MEME_DRAFT_CHAT_ID')
+            or secret(os.environ, 'MEME_TELEGRAM_CHAT_ID'))
     p = Path(path)
     if not token or not chat or not p.exists():
         return False
@@ -141,9 +142,9 @@ def compose_scan():
     mcs = [float(r.get('market_cap') or 0) for r in picks if r.get('market_cap')]
     mc_s = f", 市值都 ≤{max(mcs)/1e6:.2f}M$" if mcs else ""
     if n_smart:
-        head = f"聪明钱在买, 筹码还散着{mc_s}"
+        head = f"我盯的 meme 池里\n聪明钱在买, 筹码还散着{mc_s}"
     else:
-        head = f"meme 池里这几个\n集中度低{mc_s}"
+        head = f"我盯的 meme 池里\n只有这几个集中度低{mc_s}"
 
     def line(r, medal):
         c = r.get('cleaned_top10')
@@ -156,27 +157,28 @@ def compose_scan():
                 f"{sm_l}集中度{c_s}{mc_l}")
 
     items = [line(r, ["🥇", "🥈", "🥉"][i]) for i, r in enumerate(picks)]
-    tail = "你先看哪个? 👇\n#MemeCoin #Crypto"
+    tail = "我只列数据, 不喊单\n\n你先看哪个? 👇\n#MemeCoin #Crypto"
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
 
-    thread1 = ("筛选口径\n\n"
+    thread1 = ("我的筛选口径, 一共四条\n\n"
                "聪明钱/KOL/专业地址在买\n\n"
                "流动性≥30K\n\n"
                "集中度≤80%\n\n"
-               "狙击手≥50% 或 DEV≥20% 的一律降级, 不推")
+               "狙击手≥50% 或 DEV≥20% 的一律降级\n\n"
+               "你最看重哪一条? 👇")
     if ps.xlen(thread1) > MAX_TWEET_LEN:      # 兜底, 正常不会触发
         thread1 = "为什么盯这几个?\n\n聪明钱在买 + 集中度低 + 狙击手/DEV 已剔除。"
 
     addrs = [f"{r.get('symbol')} ({r.get('chain','?')}) {r.get('address','')}"
              for r in sa[:5] if r.get('address')]
     # 地址逐条试, 保证整条 <= 上限(X 加权)
-    tail2 = "\n\n链上数据筛选, 不代表必涨, 不构成投资建议。"
+    tail2 = "\n\n链上数据筛选, 不代表必涨\n不构成投资建议。\n\n你会先查哪一个? 👇"
     picks_a = []
     for a in addrs:
-        cand = "🗂 本轮候选合约地址(可自行查证):\n" + "\n".join(picks_a + [a]) + tail2
+        cand = "我自己会再核一遍\n合约地址(可自行查证):\n" + "\n".join(picks_a + [a]) + tail2
         if ps.xlen(cand) <= MAX_TWEET_LEN:
             picks_a.append(a)
-    thread2 = ("🗂 本轮候选合约地址(可自行查证):\n" + "\n".join(picks_a) + tail2) if picks_a else \
+    thread2 = ("我自己会再核一遍\n合约地址(可自行查证):\n" + "\n".join(picks_a) + tail2) if picks_a else \
               "链上数据筛选, 不代表必涨, 不构成投资建议。\n每天更新链上聪明钱动向。"
 
     chart = None
@@ -213,7 +215,8 @@ def compose_smart_live():
              for x in picks[:4]]
     tail = ("钱包池 = 币安排行榜筛出的实盘赢家\n"
             "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-            "只列买入 —— 他们卖出是获利了结\n"
+            "我只列买入 —— 卖出是获利了结\n"
+            "你盯过这个池子吗? 👇\n"
             "#Binance #MemeCoin")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
     thread = ("这个钱包池怎么来的?\n\n"
@@ -252,7 +255,7 @@ def compose_smart_money():
     if not d:
         return None
     fresh, done, cnt, gain = d['fresh'], d['done'], d['cnt'], d['gain']
-    head = f"聪明钱刚扫货\n{cnt(d['hook'])} 个地址同时买入同一个币"
+    head = f"我盯的钱包池刚扫货\n{cnt(d['hook'])} 个地址同时买入同一个币"
     items, syms = [], []
     if fresh:
         block = ["🟢 刚触发(还没怎么涨)"]
@@ -268,18 +271,20 @@ def compose_smart_money():
         items.append('\n'.join(block))
     tail = ("聪明钱 = 链上被持续跟踪的专业地址\n"
             "他们买什么, 往往先于市场热度\n\n"
-            "数据筛选, 不构成投资建议。\n"
+            "我不喊单, 只贴数据\n"
+            "你会跟着看哪个? 👇\n"
             "#Binance #Crypto")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
     # 跟帖也带上具体数字 —— 自检会报"全帖无数字", 而且有数字的帖子确实更有说服力
     best = max([gain(r) for r in (fresh + done)] or [0])
-    thread = ("怎么读这两组?\n\n"
+    thread = ("我盯这两组的方式\n\n"
               "🟢 刚触发 = 信号刚出、还没怎么涨\n\n"
               f"最高 {max([gain(r) for r in fresh] or [0]):+.0f}%\n\n"
               "🔥 已兑现 = 信号出过之后的涨幅\n\n"
               f"最高 {max([gain(r) for r in done] or [0]):+.0f}%\n\n"
-              f"两组里最高的一条: {best:+.0f}%\n\n"
-              "人数 = 多少个专业地址同时买它。")
+              f"我看到的最高一条: {best:+.0f}%\n\n"
+              "人数 = 多少个专业地址同时买它\n\n"
+              "你觉得哪组更值得看? 👇")
     chart = None
     try:
         import sys as _s2
@@ -343,11 +348,12 @@ def tg_draft(text):
     """
     import urllib.request
     token = secret(os.environ, 'MEME_TELEGRAM_BOT_TOKEN')
-    chat = secret(os.environ, 'MEME_TELEGRAM_CHAT_ID')
+    chat = (secret(os.environ, 'MEME_DRAFT_CHAT_ID')
+            or secret(os.environ, 'MEME_TELEGRAM_CHAT_ID'))
     if not token or not chat:
         print('TG 草稿失败: 未配置 MEME_TELEGRAM_BOT_TOKEN / MEME_TELEGRAM_CHAT_ID')
         return False
-    body = json.dumps({'chat_id': chat, 'text': '📝 X发帖草稿(meme)\n\n' + text,
+    body = json.dumps({'chat_id': chat, 'text': '📝 [Meme] X发帖草稿\n\n' + text,
                        'disable_web_page_preview': True}).encode()
     req = urllib.request.Request('https://api.telegram.org/bot' + token + '/sendMessage',
                                  data=body, headers={'Content-Type': 'application/json'})

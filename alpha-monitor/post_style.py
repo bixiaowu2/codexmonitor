@@ -73,10 +73,15 @@ def audit(text, limit=None, platform=None):
     lines = [l for l in text.split('\n') if l.strip()]
     if not lines:
         return ['空帖']
-    avg = sum(xlen(l) for l in lines) / len(lines)
+    # 合约地址行不参与行长计算 —— 0x... 无法折行，算进去是误报
+    import re as _re0
+    _addr = _re0.compile(r'0x[0-9a-fA-F]{20,}')
+    _body = [l for l in lines if not _addr.search(l)]
+    _calc = _body or lines
+    avg = sum(xlen(l) for l in _calc) / len(_calc)
     if avg > X_AVG_LINE:
         warn.append(f'平均行长 {avg:.0f} 加权字 > {X_AVG_LINE}(行太长, 拆开)')
-    longest = max(lines, key=xlen)
+    longest = max(_calc, key=xlen)
     if xlen(longest) > 60:
         warn.append(f'最长行 {xlen(longest)} 加权字, 建议拆行: {longest[:30]}…')
     if not any(c.isdigit() for c in text):

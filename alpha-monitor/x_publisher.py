@@ -125,7 +125,18 @@ def process_queue(limit=1):
 
 # ---------- 内容组装(从雷达数据生成帖子) ----------
 
-def tg_send_photo(path, caption=""):
+def _draft_chat():
+    """草稿用哪个 chat。没配 TELEGRAM_DRAFT_CHAT_ID 就退回私聊。"""
+    for line in Path("/etc/alpha-radar.env").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if k.strip() == "TELEGRAM_DRAFT_CHAT_ID":
+                return v.strip()
+    return None
+
+
+def tg_send_photo(path, caption="", chat=None):
     """把配图直接发到 Telegram(sendPhoto), 方便长按保存后发X。"""
     import urllib.request, uuid
     env = {}
@@ -135,7 +146,7 @@ def tg_send_photo(path, caption=""):
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat = env.get("TELEGRAM_CHAT_ID", "")
+    chat = chat or env.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:
         return False
     p = Path(path)
@@ -195,7 +206,8 @@ def compose_scan_alpha():
               "已上合约 = 有真实资金在博弈\n\n"
               "未上现货 = 现货上市前是布局窗口\n\n"
               "大户控盘≥60% = 主力已经拿到筹码\n\n"
-              "三条同时满足的很少, 所以才值得单独列出来。")
+              "我盯着这三条, 是因为同时满足的很少。\n\n"
+              "你会先看哪一条? 👇")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
             "label": "妖币观察池"}
 
@@ -248,14 +260,17 @@ def compose_review():
             items.append(f"{m['symbol']}  持仓 {_oi(m)/1e6:.1f}M USDT")
     tail = ("持仓上升 = 资金在布局\n"
             "持仓下降 = 资金在撤退\n\n"
-            "明天早帖给新的观察池 👇\n"
+            "我盯的是变化, 不是绝对数\n\n"
+            "你更关注加仓还是撤退? 👇\n"
             "#BinanceAlpha")
     main = ps.compose(head, items, tail)
     thread = ("这两个数字怎么看?\n\n"
               "持仓变动 ≥5% 才进这个榜\n\n"
               "持仓涨 + 价格横盘 = 主力在悄悄建仓\n\n"
               "持仓涨 + 价格急拉 = 已经启动, 波动会很大\n\n"
-              "持仓跌 = 资金走了, 别去接飞刀")
+              "持仓跌 = 资金走了, 别去接飞刀\n\n"
+              "我一般先看价格有没有跟着动。\n\n"
+              "你看到的是哪一种? 👇")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
             "label": "每日复盘"}
 
@@ -313,7 +328,7 @@ def draft_today():
     return drafts
 
 
-def tg_send(text):
+def tg_send(text, chat=None):
     """推草稿到 Telegram(人工复制发X)。"""
     import urllib.request
     env = {}
@@ -323,7 +338,7 @@ def tg_send(text):
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat = env.get("TELEGRAM_CHAT_ID", "")
+    chat = chat or env.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat:
         print("缺少 Telegram 配置")
         return False
@@ -386,8 +401,17 @@ def main():
         sent = 0
         # 每栏一条消息(图 + 该栏全文) —— 与 meme 侧一致。
         # 原来发"1 条文字 + N 条纯图", 用户得自己把图和文字对上, 看起来像"没有图"。
+        import sys as _s2
+        _s2.path.insert(0, '/opt/content-push')
+        try:
+            import relay
+        except Exception:
+            relay = None
         for d in drafts:
-            parts = [f"📝 X发帖草稿 · {d['label']} @ {ts}",
+            # 复盘类统一由内容 bot 发(群里只有一个发件人); 其余草稿走 Alpha bot
+            is_review = '复盘' in d['label']
+            _tag = '[复盘]' if is_review else '[Alpha]'
+            parts = [f"📝 {_tag} {d['label']} @ {ts}",
                      "【主帖】\n" + d['main']]
             for i, t in enumerate(d.get('thread') or [], 1):
                 parts.append(f"【跟帖{i}】\n" + t)
@@ -398,10 +422,20 @@ def main():
                 for w in ps.audit(t, platform='x'):
                     print(f"[风格告警·x · {d['label']} 跟帖{i}] {w}")
             chart = Path(d['chart']) if d.get('chart') else None
-            if chart and chart.exists() and tg_send_photo(chart, text):
+            if is_review and relay is not None:
+                _photo = chart if (chart and chart.exists()) else None
+                if relay.send(text, _photo):
+                    print(f"  {d['label']}: 已推 Telegram(内容 bot"
+                          + (f"，带图 {chart.name})" if _photo else "，纯文字)"))
+                    sent += 1
+                else:
+                    print(f"  {d['label']}: 内容 bot 发送失败")
+                continue
+            _dc = _draft_chat()
+            if chart and chart.exists() and tg_send_photo(chart, text, _dc):
                 print(f"  {d['label']}: 已推 Telegram(带图 {chart.name})")
                 sent += 1
-            elif tg_send(text):
+            elif tg_send(text, _dc):
                 print(f"  {d['label']}: 已推 Telegram(纯文字 —— 出图失败)")
                 sent += 1
         print(f"草稿已推 Telegram({sent}/{len(drafts)} 栏, 每栏一条 图+全文, 可直接照着发X)")
