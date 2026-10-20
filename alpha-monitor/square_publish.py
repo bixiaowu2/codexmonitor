@@ -533,7 +533,7 @@ def smart_money_picks():
     try:
         import bn_skills
     except Exception:
-        return None, []
+        return None
     rows = []
     for chain, cid in (('bsc', bn_skills.CHAIN_BSC), ('solana', bn_skills.CHAIN_SOL)):
         try:
@@ -543,7 +543,7 @@ def smart_money_picks():
             continue
     buys = [r for r in rows if str(r.get('direction', '')).lower() == 'buy']
     if not buys:
-        return None, []
+        return None
 
     def gain(r):
         ap = bn_skills.num(r.get('alertPrice'))

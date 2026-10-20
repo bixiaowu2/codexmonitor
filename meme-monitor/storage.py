@@ -27,6 +27,6 @@ class Store:
    d.execute("UPDATE outbox SET state='expired' WHERE state='pending' AND (created<? OR json_extract(payload,'$.channel') IS NULL)",(now-900,))
    d.execute('DELETE FROM pairs WHERE observed<?',(now-7*86400,))
    # Candidate snapshots roll off after 90 days; resolved forward tracks after 30 days.
-   d.execute('DELETE FROM signals WHERE created<?',(now-30*86400,))
-   d.execute("DELETE FROM forward_tracks WHERE created<? AND status!='open'",(now-30*86400,))
+   d.execute('DELETE FROM signals WHERE created<?',(now-7*86400,))
+   d.execute("DELETE FROM forward_tracks WHERE created<? AND status!='open'",(now-7*86400,))
    d.execute("DELETE FROM outbox WHERE created<? AND state!='pending'",(now-7*86400,))

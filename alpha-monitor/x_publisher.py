@@ -193,21 +193,22 @@ def compose_scan_alpha():
     if not sa:
         return None
     picks = sa[:3]
-    head = f"我扒了全部币安Alpha代币\n只有 {len(picks)} 个同时过三道筛"
-    items = [f"{'🥇🥈🥉'[i]} {x['symbol']}  控盘 {x['cleaned_top10']*100:.0f}%\n"
-             f"合约持仓 {x['oi_notional']/1e6:.1f}M USDT"
-             for i, x in enumerate(picks)]
-    tail = ("三道筛: 已上合约 · 未上现货 · 大户控盘≥60%\n"
-            "现货上市前, 是资金布局的窗口\n\n"
-            "这三个你先看哪个? 👇\n"
-            "#BinanceAlpha")
+    # 变体池：按当天数据特征选结构，避免每次千篇一律
+    import post_variants as _pv
+    _p = [{'symbol': x['symbol'],
+           'conc': x['cleaned_top10'] * 100,
+           'oi': x['oi_notional'] / 1e6} for x in picks]
+    _spread = ((_p[0]['conc'] - _p[-1]['conc']) / 100) if len(_p) > 1 else 0.0
+    _vid = _pv.pick('alpha_pool', n=len(_p), spread=_spread)
+    head, items, tail = _pv.alpha_pool(_vid, _p)
+    print(f"  [变体] 妖币观察池 -> V{_vid} (n={len(_p)}, spread={_spread:.2f})")
     main = ps.compose(head, items, tail)
-    thread = ("为什么是这三道筛?\n\n"
-              "已上合约 = 有真实资金在博弈\n\n"
-              "未上现货 = 现货上市前是布局窗口\n\n"
-              "大户控盘≥60% = 主力已经拿到筹码\n\n"
-              "我盯着这三条, 是因为同时满足的很少。\n\n"
-              "你会先看哪一条? 👇")
+    _tvid, thread = _pv.filter_thread(
+        [('已上合约', '有真实资金在博弈'),
+         ('未上现货', '现货上市前是布局窗口'),
+         ('大户控盘≥60%', '主力已经拿到筹码')],
+        column='alpha_filter_thread')
+    print(f"  [变体] 妖币观察池跟帖 -> T{_tvid}")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
             "label": "妖币观察池"}
 
@@ -227,7 +228,7 @@ def compose_review():
         t = json.loads(Path('/var/lib/demon-radar/track_state.json').read_text())
     except Exception:
         return None
-    ups, downs = [], []
+    ups, downs = [], []          # (symbol, chg%, b0, c0)，b0/c0 单位百万 USDT
     for m in b.get('matches', [])[:5]:
         sym = m['symbol']
         cur = t.get('oi_snap', {}).get(sym) or _oi(m)
@@ -238,39 +239,13 @@ def compose_review():
                 ups.append((sym, chg, base / 1e6, cur / 1e6))
             elif chg <= -5:
                 downs.append((sym, chg, base / 1e6, cur / 1e6))
-    n_up, n_down = len(ups), len(downs)
-    if n_up and not n_down:
-        head = f"{n_up} 个Alpha币被资金加仓\n钱在往哪走?"
-    elif n_down and not n_up:
-        head = f"{n_down} 个Alpha币遭资金撤退\n谁在被抛弃?"
-    elif n_up and n_down:
-        head = f"复盘: {n_up} 个加仓 · {n_down} 个撤退\n钱在换仓"
-    else:
-        head = "复盘: 持仓整体平稳\n没异动, 也是一种信号"
-    items = []
-    for sym, chg, b0, c0 in (ups[:2] + downs[:2])[:3]:
-        arrow = '🔺' if chg > 0 else '🔻'
-        items.append(f"{arrow} {sym}  {chg:+.0f}%\n{b0:.1f}M → {c0:.1f}M USDT")
-    if not items:
-        try:
-            cur = json.loads(Path('/var/lib/demon-radar/matches.json').read_text())
-        except Exception:
-            cur = []
-        for m in cur[:3]:
-            items.append(f"{m['symbol']}  持仓 {_oi(m)/1e6:.1f}M USDT")
-    tail = ("持仓上升 = 资金在布局\n"
-            "持仓下降 = 资金在撤退\n\n"
-            "我盯的是变化, 不是绝对数\n\n"
-            "你更关注加仓还是撤退? 👇\n"
-            "#BinanceAlpha")
+    # 变体池：按当天形状（有进有出/单边/平稳）选结构，并排除上次用过的
+    import post_variants as _pv
+    _vid, head, items, tail = _pv.alpha_review(ups, downs)
+    print(f"  [变体] 每日复盘 -> V{_vid} (加仓{len(ups)} 撤退{len(downs)})")
     main = ps.compose(head, items, tail)
-    thread = ("这两个数字怎么看?\n\n"
-              "持仓变动 ≥5% 才进这个榜\n\n"
-              "持仓涨 + 价格横盘 = 主力在悄悄建仓\n\n"
-              "持仓涨 + 价格急拉 = 已经启动, 波动会很大\n\n"
-              "持仓跌 = 资金走了, 别去接飞刀\n\n"
-              "我一般先看价格有没有跟着动。\n\n"
-              "你看到的是哪一种? 👇")
+    _tvid, thread = _pv.review_thread(ups, downs)
+    print(f"  [变体] 每日复盘跟帖 -> T{_tvid}")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
             "label": "每日复盘"}
 

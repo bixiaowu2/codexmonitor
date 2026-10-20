@@ -136,36 +136,23 @@ def compose_scan():
         return None
 
     picks = sa[:3]
-    # 钩子必须与数据一致 —— 排序把 S 级(按评分/成交量进的)排在前, 它可能聪明钱为 0,
-    # 此时**不能**写"聪明钱N人在买"(原文会出现"聪明钱0人在买"这种自相矛盾的标题)。
-    n_smart = sum(int(r.get('smart') or 0) for r in picks)
-    mcs = [float(r.get('market_cap') or 0) for r in picks if r.get('market_cap')]
-    mc_s = f", 市值都 ≤{max(mcs)/1e6:.2f}M$" if mcs else ""
-    if n_smart:
-        head = f"我盯的 meme 池里\n聪明钱在买, 筹码还散着{mc_s}"
-    else:
-        head = f"我盯的 meme 池里\n只有这几个集中度低{mc_s}"
-
-    def line(r, medal):
-        c = r.get('cleaned_top10')
-        c_s = f"{c*100:.0f}%" if c else "未知"
-        mc = r.get('market_cap')
-        mc_l = f"  市值{float(mc)/1e6:.2f}M$" if mc else ""
-        sm = int(r.get('smart') or 0)
-        sm_l = f"聪明钱{sm}人  " if sm else ""
-        return (f"{medal} {r.get('symbol')} ({str(r.get('chain','?')).upper()})\n"
-                f"{sm_l}集中度{c_s}{mc_l}")
-
-    items = [line(r, ["🥇", "🥈", "🥉"][i]) for i, r in enumerate(picks)]
-    tail = "我只列数据, 不喊单\n\n你先看哪个? 👇\n#MemeCoin #Crypto"
+    # 变体池：按当天形状（几个标的 / 集中度差 / 有无聪明钱）选结构，并排除上次用过的
+    import post_variants as _pv
+    _rows = [{'symbol': r.get('symbol'), 'chain': r.get('chain'),
+              'conc': r.get('cleaned_top10'), 'mc': r.get('market_cap'),
+              'smart': int(r.get('smart') or 0)} for r in picks]
+    _vid, head, items, tail = _pv.meme_pool(_rows)
+    print(f"  [变体] Meme观察池 -> V{_vid} "
+          f"(n={len(_rows)}, 聪明钱{sum(x['smart'] for x in _rows)}人)")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
 
-    thread1 = ("我的筛选口径, 一共四条\n\n"
-               "聪明钱/KOL/专业地址在买\n\n"
-               "流动性≥30K\n\n"
-               "集中度≤80%\n\n"
-               "狙击手≥50% 或 DEV≥20% 的一律降级\n\n"
-               "你最看重哪一条? 👇")
+    _tvid, thread1 = _pv.filter_thread(
+        [('聪明钱/KOL/专业地址在买', '有人真金白银进场'),
+         ('流动性≥30K', '低于这个数进出都难'),
+         ('集中度≤80%', '筹码太集中容易被砸'),
+         ('狙击手≥50% 或 DEV≥20% 一律降级', '这两类地址手里筹码太多')],
+        column='meme_filter_thread')
+    print(f"  [变体] Meme观察池跟帖 -> T{_tvid}")
     if ps.xlen(thread1) > MAX_TWEET_LEN:      # 兜底, 正常不会触发
         thread1 = "为什么盯这几个?\n\n聪明钱在买 + 集中度低 + 狙击手/DEV 已剔除。"
 
@@ -173,13 +160,8 @@ def compose_scan():
              for r in sa[:5] if r.get('address')]
     # 地址逐条试, 保证整条 <= 上限(X 加权)
     tail2 = "\n\n链上数据筛选, 不代表必涨\n不构成投资建议。\n\n你会先查哪一个? 👇"
-    picks_a = []
-    for a in addrs:
-        cand = "我自己会再核一遍\n合约地址(可自行查证):\n" + "\n".join(picks_a + [a]) + tail2
-        if ps.xlen(cand) <= MAX_TWEET_LEN:
-            picks_a.append(a)
-    thread2 = ("我自己会再核一遍\n合约地址(可自行查证):\n" + "\n".join(picks_a) + tail2) if picks_a else \
-              "链上数据筛选, 不代表必涨, 不构成投资建议。\n每天更新链上聪明钱动向。"
+    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN, tail2)
+    print(f"  [变体] Meme地址跟帖 -> T{_avid}")
 
     chart = None
     try:
@@ -210,22 +192,16 @@ def compose_smart_live():
     picks = _sp.smart_live_picks()
     if not picks:
         return None
-    head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
-    items = [f"🟢 {x['tag']}  {x['mc']/1e6:.2f}M$\n{x['n']} 笔买入 {x['amt']:.3g} {x['qsym']}"
-             for x in picks[:4]]
-    tail = ("钱包池 = 币安排行榜筛出的实盘赢家\n"
-            "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-            "我只列买入 —— 卖出是获利了结\n"
-            "你盯过这个池子吗? 👇\n"
-            "#Binance #MemeCoin")
+    import post_variants as _pv
+    _vid, head, items, tail = _pv.smart_live(picks)
+    print(f"  [变体] 聪明钱扫货 -> V{_vid} (n={len(picks)})")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
-    thread = ("这个钱包池怎么来的?\n\n"
-              "币安官方排行榜, 按三条硬指标筛:\n\n"
-              "胜率≥55%\n\n"
-              "已实现盈亏≥1万$\n\n"
-              "交易数≥20\n\n"
-              "筛完只留几十个地址, 盯他们最新的链上成交。\n\n"
-              "只列买入 —— 卖出是获利了结。")
+    _tvid, thread = _pv.filter_thread(
+        [('胜率≥55%', '赢的次数要明显多于输的'),
+         ('已实现盈亏≥1万$', '看落袋的, 不看浮盈'),
+         ('交易数≥20', '样本太少说明不了问题')],
+        column='wallet_filter_thread')
+    print(f"  [变体] 聪明钱扫货跟帖 -> T{_tvid}")
     chart = None
     try:
         import sys as _s2
@@ -255,36 +231,14 @@ def compose_smart_money():
     if not d:
         return None
     fresh, done, cnt, gain = d['fresh'], d['done'], d['cnt'], d['gain']
-    head = f"我盯的钱包池刚扫货\n{cnt(d['hook'])} 个地址同时买入同一个币"
-    items, syms = [], []
-    if fresh:
-        block = ["🟢 刚触发(还没怎么涨)"]
-        for r in fresh[:2]:
-            block.append(f"{r.get('ticker')}  {cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
-            syms.append(str(r.get('ticker')))
-        items.append('\n'.join(block))
-    if done:
-        block = ["🔥 已兑现(信号历史战绩)"]
-        for r in done[:2]:
-            block.append(f"{r.get('ticker')}  {cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
-            syms.append(str(r.get('ticker')))
-        items.append('\n'.join(block))
-    tail = ("聪明钱 = 链上被持续跟踪的专业地址\n"
-            "他们买什么, 往往先于市场热度\n\n"
-            "我不喊单, 只贴数据\n"
-            "你会跟着看哪个? 👇\n"
-            "#Binance #Crypto")
+    syms = [str(r.get('ticker')) for r in (fresh[:2] + done[:2])]
+    # 变体池：按当天信号形状（刚触发/已兑现/两组都有）选结构，并排除上次用过的
+    import post_variants as _pv
+    _vid, head, items, tail = _pv.smart_money(fresh, done, cnt, gain)
+    print(f"  [变体] 聪明钱买入榜 -> V{_vid} (刚触发{len(fresh)} 已兑现{len(done)})")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
-    # 跟帖也带上具体数字 —— 自检会报"全帖无数字", 而且有数字的帖子确实更有说服力
-    best = max([gain(r) for r in (fresh + done)] or [0])
-    thread = ("我盯这两组的方式\n\n"
-              "🟢 刚触发 = 信号刚出、还没怎么涨\n\n"
-              f"最高 {max([gain(r) for r in fresh] or [0]):+.0f}%\n\n"
-              "🔥 已兑现 = 信号出过之后的涨幅\n\n"
-              f"最高 {max([gain(r) for r in done] or [0]):+.0f}%\n\n"
-              f"我看到的最高一条: {best:+.0f}%\n\n"
-              "人数 = 多少个专业地址同时买它\n\n"
-              "你觉得哪组更值得看? 👇")
+    _tvid, thread = _pv.money_thread(fresh, done, cnt, gain)
+    print(f"  [变体] 聪明钱买入榜跟帖 -> T{_tvid}")
     chart = None
     try:
         import sys as _s2

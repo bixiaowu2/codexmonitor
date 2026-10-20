@@ -28,6 +28,70 @@ TP1 = 3.0   # 第一档止盈倍数
 TP2 = 10.0  # 第二档止盈倍数
 PRICE_CACHE = DATA / 'price_cache.json'
 
+# ---------------------------------------------------------------- 结果表
+# 2026-10-20 加: 让 Alpha 主选币也有可回测的历史(此前只存在滚动状态文件里)
+import sqlite3
+TRACK_DB = DATA / 'alpha_tracks.sqlite'
+MAX_DAYS = 7            # 超过 7 天没更新就算收盘
+RESET_AFTER = 7 * 86400  # 同一标的间隔超过 7 天再次入选, 算新一批
+
+
+def _init_tracks():
+    db = sqlite3.connect(str(TRACK_DB), timeout=20)
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('PRAGMA busy_timeout=5000')
+    db.execute('''CREATE TABLE IF NOT EXISTS alpha_tracks(
+        key TEXT PRIMARY KEY,
+        symbol TEXT, address TEXT, futures TEXT,
+        first_seen REAL, last_seen REAL,
+        entry REAL, last REAL, peak REAL, trough REAL, max_dd REAL,
+        tp1 INTEGER DEFAULT 0, tp2 INTEGER DEFAULT 0,
+        updates INTEGER DEFAULT 0,
+        closed INTEGER DEFAULT 0, final_mult REAL)''')
+    db.execute('CREATE INDEX IF NOT EXISTS by_sym ON alpha_tracks(symbol, first_seen)')
+    db.commit()
+    return db
+
+
+def _record_track(db, sym, address, futs, price, tp1, tp2, now):
+    """把这次观察写进结果表。price 是 demon_track 的 {'first','last','peak_3d'}。"""
+    if not price:
+        return
+    first, last, peak3 = price.get('first'), price.get('last'), price.get('peak_3d')
+    if not first or first <= 0 or not last or last <= 0:
+        return
+    row = db.execute('SELECT * FROM alpha_tracks WHERE symbol=? ORDER BY first_seen DESC LIMIT 1',
+                     (sym,)).fetchone()
+    if row is None or (now - (row[5] or 0)) > RESET_AFTER:
+        # 首次入选, 或间隔太久算新一批
+        key = f'{sym}:{time.strftime("%Y%m%d", time.gmtime(now))}'
+        db.execute('''INSERT OR REPLACE INTO alpha_tracks
+            (key,symbol,address,futures,first_seen,last_seen,entry,last,peak,trough,max_dd,
+             tp1,tp2,updates,closed,final_mult)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL)''',
+            # entry 用 last(入选时的现价) —— 前瞻, 不是 first(3天前收盘, 回溯)
+            (key, sym, address, futs, now, now, last, last, last, last,
+             0.0, int(bool(tp1)), int(bool(tp2)), 1))
+    else:
+        # 更新既有行
+        e = row[6] or last                      # entry 保持首次入选价不变
+        pk = max(row[8] or e, peak3 or last, last)
+        tr = min(row[9] or e, last)
+        db.execute('''UPDATE alpha_tracks
+            SET last_seen=?, last=?, peak=?, trough=?, max_dd=?,
+                tp1=MAX(tp1,?), tp2=MAX(tp2,?), updates=updates+1
+            WHERE key=?''',
+            (now, last, pk, tr, max(0.0, 1 - last / pk), int(bool(tp1)), int(bool(tp2)), row[0]))
+    db.commit()
+
+
+def _close_stale_tracks(db, now):
+    """超过 MAX_DAYS 没更新的标记收盘, 记最终倍数。"""
+    db.execute('''UPDATE alpha_tracks SET closed=1, final_mult=last/entry
+                  WHERE closed=0 AND entry>0 AND last IS NOT NULL
+                    AND last_seen < ?''', (now - MAX_DAYS * 86400,))
+    db.commit()
+
 
 def load_env():
     env = {}
@@ -143,6 +207,13 @@ def main():
         print('无 S 级命中币, 跳过')
         return
 
+    try:
+        tdb = _init_tracks()
+        _close_stale_tracks(tdb, time.time())
+    except Exception as _e:
+        print(f'结果表初始化失败(不影响跟踪): {_e}')
+        tdb = None
+
     state = {}
     if STATE.exists():
         try:
@@ -196,6 +267,12 @@ def main():
                 else:
                     drawn.discard(sym)
                     drawn_dd.pop(sym, None)
+        if tdb is not None and price:
+            try:
+                _record_track(tdb, sym, m.get('address'), futs, price,
+                              sym + ':tp1' in tp_hit, sym + ':tp2' in tp_hit, time.time())
+            except Exception:
+                pass   # 记录失败不能影响跟踪与告警
         frs = fetch_funding(api, futs)
         if frs:
             cur = frs[-1]
@@ -215,6 +292,11 @@ def main():
 
     state.update({'drawn_symbols': list(drawn), 'drawn_dd': drawn_dd, 'drawn_ts': drawn_ts, 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
     STATE.write_text(json.dumps(state, ensure_ascii=False))
+    if tdb is not None:
+        try:
+            tdb.close()
+        except Exception:
+            pass
     if sq_events:
         with (DATA / 'square_queue.jsonl').open('a', encoding='utf-8') as _qf:
             for _e in sq_events:

@@ -117,6 +117,27 @@ def get_candidates():
 #   校准数据显示 触发时市值 50万$+ 的, 达 2x 比例已经是 **0%**(n=42);
 #   <10万$ 达2x 41% / 达3x 21%; 10-50万$ 达2x 35%。
 #   故 S 收紧到 200万$(留一点余量), A 放到 2000万$(只做观察, 不发信号)。
+# 流动性下限 —— 2026-10-19 由纸面交易回测得出
+# 135 笔样本: 流动性 <10万 的均值约 -15%~-19%, >=10万 转为 +20%。
+# 转折明确且随流动性单调改善。可用环境变量覆盖以便复测。
+LIQ_MIN_S = float(os.environ.get('MEME_LIQ_MIN_S', '100000'))
+LIQ_MIN_A = float(os.environ.get('MEME_LIQ_MIN_A', '100000'))
+
+# 按链覆盖 —— 2026-10-19 由纸面交易按链切分得出:
+#   solana    10万 → 归零 42%→12%, 均值 -39%→+7%   (n=72→17, 证据强)
+#   bsc        5万 → 均值 -1%→+103%                 (n=25→8,  证据弱但方向对)
+#   robinhood 提高门槛反而更差(归零 24%→50%→83%), 但样本仅 6-10 笔, 不动
+LIQ_FLOOR_BY_CHAIN = {
+    'solana':    float(os.environ.get('MEME_LIQ_SOLANA', '100000')),
+    'bsc':       float(os.environ.get('MEME_LIQ_BSC', '50000')),
+    'robinhood': float(os.environ.get('MEME_LIQ_ROBINHOOD', '10000')),
+}
+
+
+def liq_floor(chain):
+    """该链的流动性下限。未列出的链用 A 级默认值。"""
+    return LIQ_FLOOR_BY_CHAIN.get(chain, LIQ_MIN_A)
+
 MC_CEIL_S = 2e6
 MC_CEIL_A = 20e6
 
@@ -414,9 +435,9 @@ def main():
             risky = (sniper >= 50) or (dev >= 20)
             # 分级: 聪明钱在场 + 流动性充足 + 集中度不极端 + 无高砸盘风险
             # 与 GoPlus 分支统一: 低集中度=好(无集中度数据的靠聪明钱兜底)
-            if smart >= 5 and liq >= 30000 and (ct is None or ct <= 0.80) and not risky:
+            if smart >= 5 and liq >= max(LIQ_MIN_S, liq_floor(c.get("chain"))) and (ct is None or ct <= 0.80) and not risky:
                 c['_tier'] = 'S'
-            elif smart >= 2 and liq >= 10000 and not risky and (ct is None or ct <= 0.80):
+            elif smart >= 2 and liq >= max(LIQ_MIN_A, liq_floor(c.get("chain"))) and not risky and (ct is None or ct <= 0.80):
                 c['_tier'] = 'A'
             else:
                 c['_tier'] = 'B'
@@ -435,10 +456,10 @@ def main():
             risky = (lvl is not None and lvl >= 2) or bool(c.get('_risk_codes'))
             # 阈值按实测选定(143 条候选扫描): kyc>=5 时 S 会涨到 33 条(太松),
             # kyc>=50 且净流入为正时收敛到 13 条。净流入>0 是这档的"聪明钱"本义。
-            if (c['_smart'] >= 50 and liq >= 30000 and (c.get('_inflow') or 0) > 0
+            if (c['_smart'] >= 50 and liq >= max(LIQ_MIN_S, liq_floor(c.get("chain"))) and (c.get('_inflow') or 0) > 0
                     and (c['_ct'] is None or c['_ct'] <= 0.80) and not risky):
                 c['_tier'] = 'S'
-            elif (c['_smart'] >= 10 and liq >= 10000 and not risky
+            elif (c['_smart'] >= 10 and liq >= max(LIQ_MIN_A, liq_floor(c.get("chain"))) and not risky
                   and (c['_ct'] is None or c['_ct'] <= 0.80)):   # A 级也要求低集中度
                 c['_tier'] = 'A'
             else:
@@ -470,9 +491,9 @@ def main():
             # 低集中度 = 筹码没被少数地址攥死 = 抛压小。这是**早期动量**的判据, 不是妖币那套。
             # 妖币的高控盘逻辑靠"合约市场能被逼空"(OI/funding); meme 是纯 DEX 无合约腿,
             # 高控盘只剩"谁能先跑" —— 那是 rug 风险, 不是机会。故不套用 demon 的判据。
-            if safe_ok and liq >= 30000 and ct <= 0.80 and (s >= 50 or smart >= 5):
+            if safe_ok and liq >= max(LIQ_MIN_S, liq_floor(c.get("chain"))) and ct <= 0.80 and (s >= 50 or smart >= 5):
                 c['_tier'] = 'S'
-            elif (safe_ok and liq >= 10000 and (s >= 35 or smart >= 2)
+            elif (safe_ok and liq >= max(LIQ_MIN_A, liq_floor(c.get("chain"))) and (s >= 35 or smart >= 2)
                   and (ct is None or ct <= 0.80)):      # A 级也要求低集中度(与 S 一致)
                 c['_tier'] = 'A'
             else:
@@ -483,10 +504,10 @@ def main():
             # 否则钱包池里 bsc 但 GoPlus 无数据的币(score=0)永远进不了 S。
             # 原条件(score 必要)保留, 只额外加"钱包命中>=5"这条通道 ——
             # 不能写成全 OR, 否则只要成交量大就能进 S。
-            if (safe_ok and liq >= 30000 and (ct is None or ct <= 0.80)
+            if (safe_ok and liq >= max(LIQ_MIN_S, liq_floor(c.get("chain"))) and (ct is None or ct <= 0.80)
                     and ((s >= 50 and (smart >= 1 or vol1h >= 50000)) or smart >= 5)):
                 c['_tier'] = 'S'
-            elif (safe_ok and liq >= 10000 and (s >= 35 or smart >= 1)
+            elif (safe_ok and liq >= max(LIQ_MIN_A, liq_floor(c.get("chain"))) and (s >= 35 or smart >= 1)
                   and (ct is None or ct <= 0.80)):
                 c['_tier'] = 'A'
             else:
@@ -606,7 +627,7 @@ def main():
     MATCHES.with_suffix('.prev.json').write_text(json.dumps(s_tier, ensure_ascii=False))
 
     header = f'🌊 Meme S级候选 @ {ts}'
-    cond = '条件: 安全 + 流动性≥30K + 集中度≤80% + (score≥50 或聪明钱≥5); S级触发信号'
+    cond = '条件: 安全 + 流动性≥{LIQ_MIN_S/1000:.0f}K + 集中度≤80% + (score≥50 或聪明钱≥5); S级触发信号'
     if sa:
         n_s = sum(1 for c in cands if c['_tier'] == 'S')
         n_a = sum(1 for c in cands if c['_tier'] == 'A')
