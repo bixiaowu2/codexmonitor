@@ -627,7 +627,7 @@ def main():
     MATCHES.with_suffix('.prev.json').write_text(json.dumps(s_tier, ensure_ascii=False))
 
     header = f'🌊 Meme S级候选 @ {ts}'
-    cond = '条件: 安全 + 流动性≥{LIQ_MIN_S/1000:.0f}K + 集中度≤80% + (score≥50 或聪明钱≥5); S级触发信号'
+    cond = f'条件: 安全 + 流动性≥{LIQ_MIN_S/1000:.0f}K + 集中度≤80% + (score≥50 或聪明钱≥5); S级触发信号'
     if sa:
         n_s = sum(1 for c in cands if c['_tier'] == 'S')
         n_a = sum(1 for c in cands if c['_tier'] == 'A')
@@ -646,12 +646,12 @@ def main():
                 continue
             elif c.get('_ct') is not None:
                 mc_s = f" 市值{(c.get('market_cap') or 0)/1e6:.2f}M$" if c.get('market_cap') else ""
-                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 市值{(c.get('market_cap') or 0)/1e6:.2f}M$ score {c['_score']:.0f}")
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) 集中度{c['_ct']*100:.0f}% 市值{(c.get('market_cap') or 0)/1e6:.2f}M$ score {c['_score']:.0f}\n   合约 {c.get('address') or '未知'}")
             else:
                 liq_w = (c.get('liquidity_usd') or 0) / 1000
                 sm = c.get('smart_wallet_hits') or 0
                 mc_s = f" 市值{(c.get('market_cap') or 0)/1e6:.2f}M$" if c.get('market_cap') else ""
-                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) score {c['_score']:.0f} 流动性{liq_w:.0f}K 聪明钱{sm}{mc_s}")
+                body_lines.append(f"{i}. [{c['_tier']}] {c.get('symbol','?')} ({c.get('chain','?')}) score {c['_score']:.0f} 流动性{liq_w:.0f}K 聪明钱{sm}{mc_s}\n   合约 {c.get('address') or '未知'}")
         if len(sa) > 10:
             body_lines.append(f"(S+A 共 {len(sa)} 个, 以上为前 10)")
         b = [c for c in cands if c['_tier'] == 'B']
@@ -668,13 +668,17 @@ def main():
     if changed:
         diff = []
         if new:
-            diff.append('新增: ' + ', '.join(
-                f"{cur[s]['symbol']}({(cur[s].get('cleaned_top10') or 0)*100:.0f}%)" for s in sorted(new)))
+            diff.append('新增: ' + '\n  '.join(
+                f"{cur[s]['symbol']}({(cur[s].get('cleaned_top10') or 0)*100:.0f}%) "
+                f"{cur[s].get('chain') or '?'} {cur[s].get('address') or '合约未知'}"
+                for s in sorted(new)))
         if gone:
             diff.append('退出: ' + ', '.join(gone))
         body = header + '\n' + '\n'.join(diff)
         if sa:
-            body += '\n\n当前S+A级: ' + ', '.join(f"{c.get('symbol')}({c['_tier']})" for c in sa)
+            body += '\n\n当前S+A级:\n' + '\n'.join(
+                f"{c.get('symbol')}({c['_tier']}) {c.get('chain') or '?'} {c.get('address') or '合约未知'}"
+                for c in sa)
         notify(env, body)
         state['last_notify'] = time.time()
     elif time.time() - state.get('last_notify', 0) >= 24 * 3600:

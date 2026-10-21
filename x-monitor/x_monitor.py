@@ -38,6 +38,8 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("x-monitor")
 STOP = False
+# 连续这么多轮"全账号抓取失败"就重开浏览器(见主循环注释)。
+MAX_STUCK_CYCLES = int(os.getenv("MAX_STUCK_CYCLES", "2"))
 # Drop queued alerts that cannot be delivered within this window (e.g. DingTalk
 # monthly quota exhausted). Alerts are time-sensitive; stale ones must not flood
 # the secondary channel when the quota resets.
@@ -715,19 +717,24 @@ def run() -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch_persistent_context(
+    def launch_browser():
+        ctx = playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             headless=headless,
             viewport={"width": 1440, "height": 1000},
         )
-        page = browser.pages[0] if browser.pages else browser.new_page()
+        return ctx, (ctx.pages[0] if ctx.pages else ctx.new_page())
+
+    with sync_playwright() as playwright:
+        browser, page = launch_browser()
         LOG.info("monitor started for %s; interval=%ss; profile=%s", ", ".join(accounts), poll_seconds, profile_dir)
         beat, stop_watchdog = start_progress_watchdog(watchdog_seconds)
         try:
             crash_counter = 0
+            stuck_cycles = 0
             while not STOP:
                 cycle_start = time.monotonic()
+                wall_start = time.time()
                 beat()
                 if registry_path:
                     try:
@@ -784,6 +791,27 @@ def run() -> int:
                     return 0 if cycle_ok and not state["pending"] else 1
                 beat()
                 elapsed = time.monotonic() - cycle_start
+                # 整轮全账号失败 = 浏览器实例卡死, 不是网络问题。实测(2026-10-20):
+                # 进程活着、page.goto 全部 45s 超时、也不触发 watchdog(因为 beat() 每账号都在打);
+                # 但用同一 profile 的**新**浏览器 1.7s 就能打开 → 只要重开浏览器就恢复。
+                # 所以连续 MAX_STUCK_CYCLES 轮全失败就自己重启浏览器, 不用等 systemd。
+                if cycle_ok or any(
+                        state.get("health", {}).get("accounts", {}).get(a, {}).get("last_success", 0) > wall_start
+                        for a in accounts):
+                    stuck_cycles = 0
+                else:
+                    stuck_cycles += 1
+                    LOG.error("cycle %d/%d: every account failed; browser considered wedged",
+                              stuck_cycles, MAX_STUCK_CYCLES)
+                    if stuck_cycles >= MAX_STUCK_CYCLES:
+                        LOG.error("recycling browser after %d stuck cycles", stuck_cycles)
+                        try:
+                            browser.close()
+                        except Exception as exc:
+                            LOG.error("browser close failed: %s", type(exc).__name__)
+                        browser, page = launch_browser()
+                        stuck_cycles = 0
+                        LOG.info("browser recycled")
                 if elapsed > poll_seconds:
                     LOG.warning("cycle took %.1fs, exceeding polling interval %ss", elapsed, poll_seconds)
                 deadline = cycle_start + poll_seconds

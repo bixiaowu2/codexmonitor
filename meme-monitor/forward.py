@@ -5,6 +5,15 @@ import json, math, time
 HORIZONS=((3600,'1h'),(21600,'6h'),(86400,'24h'),(604800,'7d'))
 GRACE_SECONDS=1800
 LEDGER_VERSION='forward-v2'
+# 入场价合理性护栏。依据实测分布：
+#   真实代币价 p1≈4.7e-12、p50≈2.5e-05 —— 低于 1e-15 不可能是真价
+#   真实最大涨幅 3893x —— 观测价超过入场价 1e4 倍，只可能是入场价登记错了
+# 只设上限不设下限：跌破入场价一万倍是真实归零，属有效数据。
+MIN_ENTRY_PRICE=1e-15
+# 稳定币不该进 meme 雷达: 价格不动, 只会把中位数往 0 拉。
+# 实测曾混入 60 条 (USDT 49 / USDC 10 / TUSD 1), 已清理。
+STABLE_SYMBOLS={'USDT','USDC','TUSD','DAI','FDUSD','USDE','USDS','USDD','PYUSD','BUSD'}
+MAX_PLAUSIBLE_RATIO=1e4
 
 
 def initialize(db):
@@ -26,6 +35,8 @@ def valid_number(value):
 def register(db,key,instrument_key,symbol,market,entry,payload,now=None):
     now=time.time() if now is None else now
     if not valid_number(entry) or not valid_number(now):return False
+    if entry<MIN_ENTRY_PRICE:return False   # 垃圾价, 登记了也只会污染统计
+    if str(symbol or '').strip().upper() in STABLE_SYMBOLS:return False
     initialize(db)
     saved=dict(payload,ledger_version=LEDGER_VERSION)
     db.execute('''INSERT OR IGNORE INTO forward_tracks
@@ -57,6 +68,11 @@ def observe(db,instrument_key,price,now=None):
     updated=0
     for row in rows:
         if now<=row['checked']:continue  # No repeated or out-of-order quotes.
+        if price>row['entry']*MAX_PLAUSIBLE_RATIO:
+            # 观测价比入场价高出一万倍 —— 不是真涨, 是入场价登记错了。
+            # 冻结这条: 不再更新 peak/trough, 也不再参与统计。
+            db.execute("UPDATE forward_tracks SET status='suspect', checked=? WHERE key=?",(now,row['key']))
+            continue
         marks=normalize_marks(row,now)
         peak=max(float(row['peak']),price);trough=min(float(row['trough']),price)
         drawdown=max(row['max_drawdown'],1-price/peak) if row['max_drawdown'] is not None else None
@@ -84,7 +100,8 @@ def summary(db,now=None):
         marks=normalize_marks(row,now)
         done=all(label in marks for _,label in HORIZONS)
         complete+=done
-        status='complete' if done else 'open'
+        # suspect 是 observe() 标的'入场价不可信', 别被这里重算回 open
+        status=('suspect' if row['status']=='suspect' else ('complete' if done else 'open'))
         if marks!=json.loads(row['marks']) or row['status']!=status:
             db.execute('UPDATE forward_tracks SET marks=?,status=? WHERE key=?',(json.dumps(marks,ensure_ascii=False),status,row['key']))
         for seconds,label in HORIZONS:

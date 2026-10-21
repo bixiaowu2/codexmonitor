@@ -36,6 +36,10 @@ TP1, TP2 = 2.0, 5.0      # 2x / 5x
 TRAIL_PCT = 0.30         # 剩余仓位从峰值回撤 30%
 MAX_HOLD_DAYS = 7
 MIN_LIQ = 30000          # 流动性太薄的币不模拟(滑点会吃掉一切)
+# 同一 key 平仓后多久可以重新开仓(秒)。0 = 永久不许重开(旧行为)。
+# 2026-10-21 改: 原来是永久锁死, 导致 S/A 候选 20 个全被占住、新开仓 72→2。
+# 实测 24h 可解锁 10/20; 取得更短会撞上同一波下跌(等于跌势里加仓)。
+REENTRY_COOLDOWN = 24 * 3600
 
 
 def init(db):
@@ -48,9 +52,26 @@ def init(db):
     _cols = {r[1] for r in db.execute('PRAGMA table_info(positions)')}
     if 'tier' not in _cols:                      # 老库平滑加列
         db.execute("ALTER TABLE positions ADD COLUMN tier TEXT DEFAULT 'S'")
+    if 'closed_at' not in _cols:
+        db.execute('ALTER TABLE positions ADD COLUMN closed_at REAL')
     db.execute('''CREATE TABLE IF NOT EXISTS fills(
         key TEXT, at REAL, kind TEXT, price REAL, mult REAL, pnl REAL)''')
     db.execute('CREATE INDEX IF NOT EXISTS fills_by_key ON fills(key, at)')
+    # 冷却到期重开时, 老行整行挪到这里 —— 不删历史, 统计仍能算全量。
+    db.execute('''CREATE TABLE IF NOT EXISTS positions_history(
+        key TEXT, symbol TEXT, chain TEXT, address TEXT,
+        entry REAL, opened REAL, peak REAL, stop REAL,
+        tp1_done INT, tp2_done INT, closed INT,
+        realized REAL, last_price REAL, last_at REAL, note TEXT,
+        tier TEXT, closed_at REAL,
+        archived_at REAL)''')
+    # 老数据回填 closed_at —— 平仓时刻就是最后一笔成交的时刻。
+    # 实测 162 笔已平仓全部有 fills 记录(0 缺失), 这次回填是完整的;
+    # 万一有个别缺失, 留 NULL 会被当成「已过冷却」= 可重开, 不会把币永久锁死。
+    # 放在 fills 建表之后才跑, 且只对 closed_at IS NULL 生效 —— 幂等。
+    db.execute('''UPDATE positions SET closed_at=
+                  (SELECT MAX(at) FROM fills WHERE fills.key=positions.key)
+                  WHERE closed=1 AND closed_at IS NULL''')
 
 
 def price_of(c, matches):
@@ -96,14 +117,36 @@ def run():
         if (x.get('liquidity_usd') or 0) < MIN_LIQ:
             continue
         key = f"{x.get('chain')}:{str(x.get('address', '')).lower()}"
-        if db.execute('SELECT 1 FROM positions WHERE key=?', (key,)).fetchone():
-            continue
+        # 同一个 key 能不能再开一笔:
+        #   还开着        → 不能(不能加仓)
+        #   平仓不足 24h  → 不能(那通常是同一波下跌, 等于在跌势里加仓)
+        #   平仓已超 24h  → **能**。原来是永久不许, 结果 S/A 候选 20 个全被占死、
+        #                   新开仓 72→59→42→9→2, 样本停止增长。
+        # closed_at 为 NULL(理论上不该出现)按「冷却已过」处理, 宁可多开也不锁死。
+        prev = db.execute('SELECT closed, closed_at FROM positions WHERE key=?',
+                          (key,)).fetchone()
+        if prev is not None:
+            if not prev['closed']:
+                continue
+            if prev['closed_at'] is not None and now - prev['closed_at'] < REENTRY_COOLDOWN:
+                continue
         try:
             entry = float(x.get('price_usd') or 0)
         except (TypeError, ValueError):
             continue
         if entry <= 0:
             continue
+        if prev is not None:
+            # 冷却已过: 同一 key 是主键, 先把老行挪到 positions_history 再插新行。
+            # ⚠️ 必须放在取价/校验**之后** —— 否则价格缺失时会先删老行、又插不进新行,
+            # 等于凭空丢一笔历史。
+            # 老行不删只挪: 统计仍能算全量(fills 里也还留着它的成交)。
+            # 显式列名, 不靠 `SELECT *` 的列序 —— 以后 positions 加列也不会错位。
+            _hc = ('key,symbol,chain,address,entry,opened,peak,stop,tp1_done,tp2_done,'
+                   'closed,realized,last_price,last_at,note,tier,closed_at')
+            db.execute(f'INSERT INTO positions_history({_hc},archived_at) '
+                       f'SELECT {_hc},? FROM positions WHERE key=?', (now, key))
+            db.execute('DELETE FROM positions WHERE key=?', (key,))
         db.execute('INSERT INTO positions(key,symbol,chain,address,entry,opened,peak,stop,last_price,last_at,tier)'
                    ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                    (key, x.get('symbol'), x.get('chain'), x.get('address'),
@@ -121,30 +164,35 @@ def run():
                    (peak, price, now, p['key']))
         mult = price / entry
 
-        def close_part(kind, frac, reason):
-            pnl = frac * (mult - 1)
-            db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?)', (p['key'], now, kind, price, mult, pnl))
+        def close_part(kind, frac, reason, at_price=None):
+            # at_price: 指定成交价。止盈用触发价(entry*TP1), 止损/移动止盈用当轮观测价。
+            # 2026-10-20 修: 原来一律用观测价, 而 10 分钟轮询下触发时的观测价
+            # 可能远高于触发价 → 止盈收益被系统性高估(tp1 中位 2.44x vs 应有 2.0x)。
+            px = at_price if at_price is not None else price
+            m = px / entry
+            pnl = frac * (m - 1)
+            db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?)', (p['key'], now, kind, px, m, pnl))
             db.execute('UPDATE positions SET realized=realized+? WHERE key=?', (pnl, p['key']))
             return pnl
 
         # 止损(整仓)
         if price <= p['stop']:
             close_part('stop', 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0, 'stop')
-            db.execute("UPDATE positions SET closed=1, note=? WHERE key=?", ('止损', p['key']))
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?", (now, '止损', p['key']))
             closed += 1
             continue
         if not p['tp1_done'] and mult >= TP1:
-            close_part('tp1', 1 / 3, 'tp1')
+            close_part('tp1', 1 / 3, 'tp1', entry * TP1)
             db.execute('UPDATE positions SET tp1_done=1 WHERE key=?', (p['key'],))
         if not p['tp2_done'] and mult >= TP2:
-            close_part('tp2', 1 / 3, 'tp2')
+            close_part('tp2', 1 / 3, 'tp2', entry * TP2)
             db.execute('UPDATE positions SET tp2_done=1 WHERE key=?', (p['key'],))
         # 剩余仓位: 峰值回撤 30%
         if price <= peak * (1 - TRAIL_PCT):
             left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
             if left > 0:
                 close_part('trail', left, 'trail')
-                db.execute("UPDATE positions SET closed=1, note=? WHERE key=?", ('移动止盈', p['key']))
+                db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?", (now, '移动止盈', p['key']))
                 closed += 1
                 continue
         # 超期结算
@@ -152,7 +200,7 @@ def run():
             left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
             if left > 0:
                 close_part('timeout', left, 'timeout')
-            db.execute("UPDATE positions SET closed=1, note=? WHERE key=?", ('持有到期', p['key']))
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?", (now, '持有到期', p['key']))
             closed += 1
 
     db.commit()
@@ -166,15 +214,22 @@ def report():
     db.row_factory = sqlite3.Row
     init(db)
     rows = db.execute('SELECT * FROM positions').fetchall()
-    if not rows:
+    # 冷却到期的老行会被挪进 positions_history(不删)。统计必须把两边合起来,
+    # 否则每重开一次, 报告里的样本就少一笔 —— 那是把历史删掉的另一种方式。
+    try:
+        hist = db.execute('SELECT * FROM positions_history').fetchall()
+    except sqlite3.OperationalError:
+        hist = []
+    if not rows and not hist:
         print('还没有纸面交易记录 —— 等下一个 S 级信号')
         db.close()
         return
-    closed = [r for r in rows if r['closed']]
+    closed = [r for r in list(rows) + list(hist) if r['closed']]
     openp = [r for r in rows if not r['closed']]
     rets = [r['realized'] for r in closed]
     print('=' * 72)
-    print(f'纸面交易统计: 共 {len(rows)} 笔 | 已平仓 {len(closed)} | 持仓中 {len(openp)}')
+    print(f'纸面交易统计: 共 {len(rows) + len(hist)} 笔 | 已平仓 {len(closed)} | 持仓中 {len(openp)}'
+          + (f' | 其中已归档 {len(hist)} 笔(冷却后重开过)' if hist else ''))
     print('=' * 72)
     from collections import defaultdict
     by_tier = defaultdict(list)

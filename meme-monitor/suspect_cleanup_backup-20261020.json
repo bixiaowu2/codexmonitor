@@ -1,0 +1,170 @@
+[
+ {
+  "key": "meme-v0.5.3:event:risk:bsc:0xa709802ac0d24d06bc358aaf7a5744fb9b7f0000:995510",
+  "symbol": "bsc:0xa709802ac0d24d06bc358aaf7a5744fb9b7f0000",
+  "entry": 2.176e-36,
+  "peak": 0.00113898600452644,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:8uda2axzu9pl7hjcmgaof7tcekxeponazexnj8cz4seq:248909",
+  "symbol": "USDT",
+  "entry": 1.9687895508690634e-12,
+  "peak": 1.0053865585107804,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:bsc:0xcc3980ded9d1aa92600b8d8b7afac7b88dc834f1:995645",
+  "symbol": "bsc:0xcc3980ded9d1aa92600b8d8b7afac7b88dc834f1",
+  "entry": 1.37212228016057e-16,
+  "peak": 1.37212228016057e-16,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:migrated:solana:fddohpbzfrryj7tbe2uoumaydcztumbtopsybjor3t4a:248912",
+  "symbol": "HAI",
+  "entry": 4.754887768888126e-12,
+  "peak": 7.972772652086493e-05,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:bsc:0xf6ff1dc3687dcb66a910334211f73f3c5edc0a4f:995650",
+  "symbol": "bsc:0xf6ff1dc3687dcb66a910334211f73f3c5edc0a4f",
+  "entry": 9.91156756224287e-21,
+  "peak": 1.4890160930093764e-15,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:bsc:0x8fe8441a4bf03a073cddc16790359050b4923d20:995654",
+  "symbol": "bsc:0x8fe8441a4bf03a073cddc16790359050b4923d20",
+  "entry": 5.02830585570576e-17,
+  "peak": 3.657081477300927e-12,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:bsc:0x7b14bc3749c96ff0cd7af72b9a56d3b626b27777:995660",
+  "symbol": "bsc:0x7b14bc3749c96ff0cd7af72b9a56d3b626b27777",
+  "entry": 8.60515507752934e-10,
+  "peak": 0.00014777083687228003,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:migrated:solana:dfdespjukgyf9v9t5hb4bcegyumatuugb1rcwqhsnar9:248917",
+  "symbol": "LONG",
+  "entry": 1.0478958332919969e-10,
+  "peak": 8.8041069766237e-06,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:migrated:solana:ey1a8rhfcsg2ehb8dc8crbdidj2tmromqs3pd5lr53en:248918",
+  "symbol": "ELON",
+  "entry": 4.559192211987973e-12,
+  "peak": 4.462568022602141e-05,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248925",
+  "symbol": "USDT",
+  "entry": 2.7659867948309476e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248926",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248927",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248928",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248929",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:robinhood:0xfe44a8a4b6dba8caf5987fc1b654a5321dab09bf:995721",
+  "symbol": "robinhood:0xfe44a8a4b6dba8caf5987fc1b654a5321dab09bf",
+  "entry": 7.6022144321761e-17,
+  "peak": 7.65e-17,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248930",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248931",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-v0.5.3:event:risk:robinhood:0x7e0ebbdf02439e46305afbde81ed48940e4b792c:995725",
+  "symbol": "robinhood:0x7e0ebbdf02439e46305afbde81ed48940e4b792c",
+  "entry": 5.57039254561162e-16,
+  "peak": 5.604e-16,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248932",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248933",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248934",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:migrated:solana:chtjv9catmm9qsw2maidhnhbqx9xhfw88tqsbb6ezhek:248934",
+  "symbol": "MEGA",
+  "entry": 9.19977685901372e-10,
+  "peak": 2.390757176908068e-05,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248935",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ },
+ {
+  "key": "meme-rush-v1:finalizing:solana:eqdoypd9i7xmxnwwtpmep5es5k3ymeisjj24fghkzm2a:248936",
+  "symbol": "USDT",
+  "entry": 2.94876513028114e-11,
+  "peak": 1.0015321739845215,
+  "was_status": "open"
+ }
+]

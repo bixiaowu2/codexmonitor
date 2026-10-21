@@ -210,7 +210,7 @@ def compose_scan_alpha():
         column='alpha_filter_thread')
     print(f"  [变体] 妖币观察池跟帖 -> T{_tvid}")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
-            "label": "妖币观察池"}
+            "label": "妖币观察池", "vid": _vid, "thread_vid": _tvid}
 
 
 def compose_review():
@@ -225,20 +225,13 @@ def compose_review():
         pass
     try:
         b = json.loads(Path('/var/lib/demon-radar/baseline.json').read_text())
-        t = json.loads(Path('/var/lib/demon-radar/track_state.json').read_text())
     except Exception:
         return None
-    ups, downs = [], []          # (symbol, chg%, b0, c0)，b0/c0 单位百万 USDT
-    for m in b.get('matches', [])[:5]:
-        sym = m['symbol']
-        cur = t.get('oi_snap', {}).get(sym) or _oi(m)
-        base = _oi(m)
-        if base > 0:
-            chg = (cur / base - 1) * 100
-            if chg >= 5:
-                ups.append((sym, chg, base / 1e6, cur / 1e6))
-            elif chg <= -5:
-                downs.append((sym, chg, base / 1e6, cur / 1e6))
+    # 当前持仓取 matches.json，不取会冻结的 oi_snap（见 oi_now 注释）。
+    import oi_now
+    _up5, _dn5 = oi_now.review_moves(b.get('matches', []))
+    ups = [(s, c, b0, c0) for s, c, b0, c0, _a in _up5]      # 百万 USDT
+    downs = [(s, c, b0, c0) for s, c, b0, c0, _a in _dn5]
     # 变体池：按当天形状（有进有出/单边/平稳）选结构，并排除上次用过的
     import post_variants as _pv
     _vid, head, items, tail = _pv.alpha_review(ups, downs)
@@ -247,7 +240,7 @@ def compose_review():
     _tvid, thread = _pv.review_thread(ups, downs)
     print(f"  [变体] 每日复盘跟帖 -> T{_tvid}")
     return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
-            "label": "每日复盘"}
+            "label": "每日复盘", "vid": _vid, "thread_vid": _tvid}
 
 
 def _xlen(t):
@@ -259,31 +252,47 @@ def _xlen(t):
 
 
 def compose_smart_live_x():
-    """「聪明钱刚扫货」X 版。与广场版同源(square_publish.smart_live_picks)。"""
+    """「链上追踪器扫货」X 版。与广场版同源(square_publish.smart_live_picks)。
+
+    注意：当前 main() 没调用本函数（实际在跑的是 meme_publish.compose_smart_live）。
+    保留它只为防有人重新接回来 —— 所以口径必须和 meme_publish 一致，不能再声称
+    「自建钱包池 / 胜率≥55% 筛出」：trackerType=1 是币安自己的追踪器，
+    实测 SOL 侧与我们那 90 个地址的钱包池重合 0/32。
+    """
     import sys as _s
     _s.path.insert(0, '/opt/alpha-radar')
     import post_style as ps
     try:
         import square_publish as _sp
+        import post_variants as _pv
     except Exception:
         return None
     picks = _sp.smart_live_picks()
     if not picks:
         return None
-    head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
-    items = [f"🟢 {x['tag']}  {x['mc']/1e6:.2f}M$\n{x['n']} 笔买入 {x['amt']:.3g} {x['qsym']}"
-             for x in picks[:4]]
-    tail = ("钱包池 = 币安排行榜筛出的实盘赢家\n"
-            "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-            "只列买入 —— 他们卖出是获利了结 👇\n"
-            "#Binance #MemeCoin")
-    main = ps.compose(head, items, tail)
-    thread = ("这个钱包池怎么来的?\n\n"
-              "币安官方排行榜里按三条硬指标筛:\n\n"
-              "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-              "筛完只留几十个地址, 然后盯他们最新的链上成交。\n\n"
-              "只列买入 —— 卖出是获利了结, 买入才是新动作。")
-    return {'main': main, 'thread': [thread], 'chart': None, 'label': '聪明钱扫货'}
+    _vid, head, items, tail = _pv.smart_live(picks)
+    main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
+    addrs = _pv.smart_live_addrs(picks, focus_first=True)
+    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN,
+                                        '\n\n链上数据, 不代表必涨\n不构成投资建议。')
+    _miss = _pv.addr_covered(main, picks, addrs)
+    if _miss:
+        print(f"  ⚠️ 主帖点名但地址跟帖没覆盖: {', '.join(_miss)}")
+    return {'main': main, 'thread': [thread2], 'chart': None, 'label': '链上追踪扫货',
+            'addresses': addrs}
+
+
+DRAFT_LOG = Path('/var/lib/x-publisher/drafts.jsonl')
+
+
+def _draft_log(rec):
+    """把推出去的草稿落盘。写失败不能影响发帖。"""
+    try:
+        DRAFT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DRAFT_LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except Exception as e:
+        print(f"  [草稿日志] 写失败(不影响发帖): {type(e).__name__}")
 
 
 def draft_today():
@@ -397,6 +406,14 @@ def main():
                 for w in ps.audit(t, platform='x'):
                     print(f"[风格告警·x · {d['label']} 跟帖{i}] {w}")
             chart = Path(d['chart']) if d.get('chart') else None
+            _draft_log({'ts': time.time(),
+                        'ts_human': time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime()),
+                        'label': d['label'],
+                        'vid': d.get('vid'),
+                        'thread_vid': d.get('thread_vid'),
+                        'chart': d.get('chart'),
+                        'main': d['main'],
+                        'thread': d.get('thread') or []})
             if is_review and relay is not None:
                 _photo = chart if (chart and chart.exists()) else None
                 if relay.send(text, _photo):

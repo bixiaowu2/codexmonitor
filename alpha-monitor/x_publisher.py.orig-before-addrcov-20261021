@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+"""X 发帖器: 把三个雷达(妖币/meme/股票)的输出组装成推文, 经官方 API 发布。
+
+三类内容(与推送体系一致):
+  筛选类: 今日 S 级观察池清单
+  信号类: 启动/回撤/止盈即时帖
+  复盘类: 每日雷达复盘
+
+防封设计(合规向):
+  - 官方 API 免费档, 明牌自动化;
+  - 每日发帖上限(默认 8) + 发布间隔随机抖动;
+  - 内容全部为自有雷达数据, 无抓取/无互动自动化。
+用法:
+  x_publisher.py --test          发一条测试帖(验证链路)
+  x_publisher.py --scan          立即组装+发布一条"筛选类"内容(若队列允许)
+  x_publisher.py --queue FILE    把指定 JSONL 内容加入发布队列
+  x_publisher.py --run           处理队列(由 cron/timer 调度)
+"""
+from __future__ import annotations
+import sys, json, time, random, argparse, urllib.request
+from pathlib import Path
+from datetime import datetime, timezone
+
+DATA = Path('/var/lib/x-publisher')
+QUEUE = DATA / 'queue.jsonl'
+STATE = DATA / 'state.json'
+CREDS = Path('/etc/x-publisher/x_credentials.json')
+
+DAILY_LIMIT = 8          # 每天最多发(免费档 1500/月, 留足余量)
+MIN_GAP_SECONDS = 1800   # 两条最小间隔 30 分钟
+MAX_GAP_SECONDS = 5400   # 抖动上限 90 分钟
+MAX_TWEET_LEN = 280
+
+
+
+
+def _oi(m):
+    """baseline.json 的字段名中途从 `oi` 改成了 `oi_notional`, 旧文件仍是 `oi`。
+    两处 review 只读 `oi_notional` → 旧 baseline 全读到 0 → 复盘永远"无可发内容"。
+    这里兼容两种名字。"""
+    return m.get('oi_notional') or m.get('oi') or 0
+
+def load_creds():
+    d = json.loads(CREDS.read_text())
+    return d['api_key'], d['api_secret'], d['access_token'], d['access_secret']
+
+
+def get_api():
+    import tweepy
+    k, s, at, ats = load_creds()
+    # v2 Client + OAuth1 user context: 免费档只有 POST /2/tweets
+    return tweepy.Client(consumer_key=k, consumer_secret=s,
+                         access_token=at, access_token_secret=ats,
+                         wait_on_rate_limit=True)
+
+
+def state():
+    if STATE.exists():
+        try:
+            return json.loads(STATE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def save_state(st):
+    DATA.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(st, ensure_ascii=False))
+
+
+def can_post(st, now=None):
+    now = time.time() if now is None else now
+    today = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d')
+    if st.get('post_date') != today:
+        return True  # 新的一天
+    if st.get('post_count', 0) >= DAILY_LIMIT:
+        return False
+    if now - st.get('last_post', 0) < MIN_GAP_SECONDS:
+        return False
+    return True
+
+
+def post_tweet(text):
+    api = get_api()
+    if len(text) > MAX_TWEET_LEN:
+        text = text[:MAX_TWEET_LEN - 1] + '…'
+    resp = api.create_tweet(text=text)
+    return resp.data['id']
+def enqueue(text, kind='manual'):
+    DATA.mkdir(parents=True, exist_ok=True)
+    with QUEUE.open('a', encoding='utf-8') as f:
+        f.write(json.dumps({'kind': kind, 'text': text, 'created': time.time()}, ensure_ascii=False) + '\n')
+
+
+def process_queue(limit=1):
+    """每次最多发 limit 条(节奏控制); 成功后写入随机下次间隔。"""
+    st = state()
+    now = time.time()
+    if not can_post(st, now):
+        print(f"节奏限制: 今日已发 {st.get('post_count',0)}/{DAILY_LIMIT}, 上次距现在 {int((now-st.get('last_post',0))/60)} 分钟。跳过。")
+        return False
+    if not QUEUE.exists():
+        print('队列为空')
+        return False
+    lines = [l for l in QUEUE.read_text(encoding='utf-8').splitlines() if l.strip()]
+    if not lines:
+        print('队列为空')
+        return False
+    item = json.loads(lines[0])
+    rest = lines[1:]
+    try:
+        tid = post_tweet(item['text'])
+        st['post_count'] = (st.get('post_count', 0) + 1) if st.get('post_date') == datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d') else 1
+        st['post_date'] = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d')
+        st['last_post'] = now
+        save_state(st)
+        QUEUE.write_text('\n'.join(rest) + ('\n' if rest else ''))
+        print(f"已发布 tweet_id={tid} kind={item['kind']}")
+        return True
+    except Exception as e:
+        # 失败保留在队首, 记录错误(避免刷错内容)
+        print(f"发布失败: {type(e).__name__}: {str(e)[:150]}")
+        return False
+
+
+# ---------- 内容组装(从雷达数据生成帖子) ----------
+
+def _draft_chat():
+    """草稿用哪个 chat。没配 TELEGRAM_DRAFT_CHAT_ID 就退回私聊。"""
+    for line in Path("/etc/alpha-radar.env").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if k.strip() == "TELEGRAM_DRAFT_CHAT_ID":
+                return v.strip()
+    return None
+
+
+def tg_send_photo(path, caption="", chat=None):
+    """把配图直接发到 Telegram(sendPhoto), 方便长按保存后发X。"""
+    import urllib.request, uuid
+    env = {}
+    for line in Path("/etc/alpha-radar.env").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat = chat or env.get("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        return False
+    p = Path(path)
+    if not p.exists():
+        return False
+    boundary = uuid.uuid4().hex
+    fields = {"chat_id": chat}
+    if caption:
+        fields["caption"] = caption[:1000]
+    body = b""
+    for k, v in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{p.name}\"\r\n"
+             f"Content-Type: image/png\r\n\r\n").encode()
+    body += p.read_bytes() + b"\r\n"
+    body += (f"--{boundary}--\r\n").encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+        return True
+    except Exception as e:
+        print("发图失败:", str(e)[:100])
+        return False
+
+
+def compose_scan_alpha():
+    """筛选类(早间栏目)。风格见 post_style: 短行 + 具体数字 + 结尾开放循环。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    try:
+        import x_chart
+        x_chart.chart_scan()
+    except Exception:
+        pass
+    try:
+        m = json.loads(Path('/var/lib/demon-radar/matches.json').read_text())
+    except Exception:
+        return None
+    sa = [x for x in m if x.get('tier') in ('S', 'A')]
+    if not sa:
+        return None
+    picks = sa[:3]
+    # 变体池：按当天数据特征选结构，避免每次千篇一律
+    import post_variants as _pv
+    _p = [{'symbol': x['symbol'],
+           'conc': x['cleaned_top10'] * 100,
+           'oi': x['oi_notional'] / 1e6} for x in picks]
+    _spread = ((_p[0]['conc'] - _p[-1]['conc']) / 100) if len(_p) > 1 else 0.0
+    _vid = _pv.pick('alpha_pool', n=len(_p), spread=_spread)
+    head, items, tail = _pv.alpha_pool(_vid, _p)
+    print(f"  [变体] 妖币观察池 -> V{_vid} (n={len(_p)}, spread={_spread:.2f})")
+    main = ps.compose(head, items, tail)
+    _tvid, thread = _pv.filter_thread(
+        [('已上合约', '有真实资金在博弈'),
+         ('未上现货', '现货上市前是布局窗口'),
+         ('大户控盘≥60%', '主力已经拿到筹码')],
+        column='alpha_filter_thread')
+    print(f"  [变体] 妖币观察池跟帖 -> T{_tvid}")
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
+            "label": "妖币观察池", "vid": _vid, "thread_vid": _tvid}
+
+
+def compose_review():
+    """复盘类(晚间栏目)。风格同 post_style。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    try:
+        import x_chart
+        x_chart.chart_review()
+    except Exception:
+        pass
+    try:
+        b = json.loads(Path('/var/lib/demon-radar/baseline.json').read_text())
+    except Exception:
+        return None
+    # 当前持仓取 matches.json，不取会冻结的 oi_snap（见 oi_now 注释）。
+    import oi_now
+    _up5, _dn5 = oi_now.review_moves(b.get('matches', []))
+    ups = [(s, c, b0, c0) for s, c, b0, c0, _a in _up5]      # 百万 USDT
+    downs = [(s, c, b0, c0) for s, c, b0, c0, _a in _dn5]
+    # 变体池：按当天形状（有进有出/单边/平稳）选结构，并排除上次用过的
+    import post_variants as _pv
+    _vid, head, items, tail = _pv.alpha_review(ups, downs)
+    print(f"  [变体] 每日复盘 -> V{_vid} (加仓{len(ups)} 撤退{len(downs)})")
+    main = ps.compose(head, items, tail)
+    _tvid, thread = _pv.review_thread(ups, downs)
+    print(f"  [变体] 每日复盘跟帖 -> T{_tvid}")
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
+            "label": "每日复盘", "vid": _vid, "thread_vid": _tvid}
+
+
+def _xlen(t):
+    """兼容旧调用; 实现已统一到 post_style.xlen。"""
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    return ps.xlen(t)
+
+
+def compose_smart_live_x():
+    """「链上追踪器扫货」X 版。与广场版同源(square_publish.smart_live_picks)。
+
+    注意：当前 main() 没调用本函数（实际在跑的是 meme_publish.compose_smart_live）。
+    保留它只为防有人重新接回来 —— 所以口径必须和 meme_publish 一致，不能再声称
+    「自建钱包池 / 胜率≥55% 筛出」：trackerType=1 是币安自己的追踪器，
+    实测 SOL 侧与我们那 90 个地址的钱包池重合 0/32。
+    """
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import post_style as ps
+    try:
+        import square_publish as _sp
+        import post_variants as _pv
+    except Exception:
+        return None
+    picks = _sp.smart_live_picks()
+    if not picks:
+        return None
+    _vid, head, items, tail = _pv.smart_live(picks)
+    main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
+    addrs = _pv.smart_live_addrs(picks)
+    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN,
+                                        '\n\n链上数据, 不代表必涨\n不构成投资建议。')
+    return {'main': main, 'thread': [thread2], 'chart': None, 'label': '链上追踪扫货',
+            'addresses': addrs}
+
+
+DRAFT_LOG = Path('/var/lib/x-publisher/drafts.jsonl')
+
+
+def _draft_log(rec):
+    """把推出去的草稿落盘。写失败不能影响发帖。"""
+    try:
+        DRAFT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DRAFT_LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except Exception as e:
+        print(f"  [草稿日志] 写失败(不影响发帖): {type(e).__name__}")
+
+
+def draft_today():
+    """生成今日草稿包(妖币观察池 + 每日复盘)。
+
+    「聪明钱扫货」已移出 —— 它的内容是 SOL/BSC 小币(钱包池), 属 meme 内容,
+    现由 meme_publish 的草稿包发出。
+    """
+    drafts = []
+    for fn in (compose_scan_alpha, compose_review):
+        try:
+            text = fn()
+        except Exception:
+            text = None
+        if text:
+            drafts.append(text)
+    return drafts
+
+
+def tg_send(text, chat=None):
+    """推草稿到 Telegram(人工复制发X)。"""
+    import urllib.request
+    env = {}
+    for line in Path("/etc/alpha-radar.env").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat = chat or env.get("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        print("缺少 Telegram 配置")
+        return False
+    body = json.dumps({"chat_id": chat, "text": text, "disable_web_page_preview": True}).encode()
+    req = urllib.request.Request("https://api.telegram.org/bot" + token + "/sendMessage",
+                                 data=body, headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=15).read()
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--test', action='store_true')
+    ap.add_argument('--scan', action='store_true')
+    ap.add_argument('--review', action='store_true')
+    ap.add_argument('--run', action='store_true')
+    ap.add_argument('--draft', action='store_true', help='生成今日草稿推文, 推送Telegram(人工发X)')
+    args = ap.parse_args()
+
+    if args.test:
+        text = ('Alpha雷达上线测试 ✅\n'
+                '本号将日更: 币安Alpha妖币观察池(大户控盘筛选)/启动·回撤信号/每日复盘\n'
+                '数据筛选, 不构成投资建议。')
+        try:
+            tid = post_tweet(text)
+            print(f"测试帖已发 tweet_id={tid}")
+        except Exception as e:
+            print(f"测试失败: {type(e).__name__}: {str(e)[:200]}")
+        return
+
+    if args.scan:
+        text = compose_scan_alpha()
+        if text:
+            enqueue(text, 'scan')
+            print('筛选类内容已入队')
+        else:
+            print('无筛选内容')
+        return
+    if args.review:
+        text = compose_review()
+        if text:
+            enqueue(text, 'review')
+            print('复盘类内容已入队')
+        else:
+            print('无复盘内容')
+        return
+    if args.run:
+        process_queue()
+        return
+
+    if args.draft:
+        drafts = draft_today()
+        if not drafts:
+            print("今日无可发内容")
+            return
+        import sys as _s
+        _s.path.insert(0, '/opt/alpha-radar')
+        import post_style as ps
+        ts = time.strftime("%m-%d %H:%M UTC", time.gmtime())
+        sent = 0
+        # 每栏一条消息(图 + 该栏全文) —— 与 meme 侧一致。
+        # 原来发"1 条文字 + N 条纯图", 用户得自己把图和文字对上, 看起来像"没有图"。
+        import sys as _s2
+        _s2.path.insert(0, '/opt/content-push')
+        try:
+            import relay
+        except Exception:
+            relay = None
+        for d in drafts:
+            # 复盘类统一由内容 bot 发(群里只有一个发件人); 其余草稿走 Alpha bot
+            is_review = '复盘' in d['label']
+            _tag = '[复盘]' if is_review else '[Alpha]'
+            parts = [f"📝 {_tag} {d['label']} @ {ts}",
+                     "【主帖】\n" + d['main']]
+            for i, t in enumerate(d.get('thread') or [], 1):
+                parts.append(f"【跟帖{i}】\n" + t)
+            text = "\n\n".join(parts)
+            for w in ps.audit(d['main'], platform='x'):
+                print(f"[风格告警·x · {d['label']}] {w}")
+            for i, t in enumerate(d.get('thread') or [], 1):
+                for w in ps.audit(t, platform='x'):
+                    print(f"[风格告警·x · {d['label']} 跟帖{i}] {w}")
+            chart = Path(d['chart']) if d.get('chart') else None
+            _draft_log({'ts': time.time(),
+                        'ts_human': time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime()),
+                        'label': d['label'],
+                        'vid': d.get('vid'),
+                        'thread_vid': d.get('thread_vid'),
+                        'chart': d.get('chart'),
+                        'main': d['main'],
+                        'thread': d.get('thread') or []})
+            if is_review and relay is not None:
+                _photo = chart if (chart and chart.exists()) else None
+                if relay.send(text, _photo):
+                    print(f"  {d['label']}: 已推 Telegram(内容 bot"
+                          + (f"，带图 {chart.name})" if _photo else "，纯文字)"))
+                    sent += 1
+                else:
+                    print(f"  {d['label']}: 内容 bot 发送失败")
+                continue
+            _dc = _draft_chat()
+            if chart and chart.exists() and tg_send_photo(chart, text, _dc):
+                print(f"  {d['label']}: 已推 Telegram(带图 {chart.name})")
+                sent += 1
+            elif tg_send(text, _dc):
+                print(f"  {d['label']}: 已推 Telegram(纯文字 —— 出图失败)")
+                sent += 1
+        print(f"草稿已推 Telegram({sent}/{len(drafts)} 栏, 每栏一条 图+全文, 可直接照着发X)")
+        return
+
+    print(__doc__)
+
+
+if __name__ == '__main__':
+    main()

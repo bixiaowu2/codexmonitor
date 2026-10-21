@@ -156,12 +156,38 @@ def compose_scan():
     if ps.xlen(thread1) > MAX_TWEET_LEN:      # 兜底, 正常不会触发
         thread1 = "为什么盯这几个?\n\n聪明钱在买 + 集中度低 + 狙击手/DEV 已剔除。"
 
+    # 合约地址跟帖。**S 级必须全带上**(用户 2026-10-21 明确要求):
+    # 原来写 sa[:5], S 超过 5 个时后面的 S 会被截掉; address_thread 又是从尾部
+    # 丢条的 —— 两个截断叠加, S 级的地址可能根本发不出去。这里显式保证:
+    # 所有 S 排最前(全部带上), 再用 A 级补到 5 条。
+    _s_rows = [r for r in sa if r.get('tier') == 'S' and r.get('address')]
+    _a_rows = [r for r in sa if r.get('tier') != 'S' and r.get('address')]
+    _addr_rows = _s_rows + _a_rows[:max(0, 5 - len(_s_rows))]
     addrs = [f"{r.get('symbol')} ({r.get('chain','?')}) {r.get('address','')}"
-             for r in sa[:5] if r.get('address')]
+             for r in _addr_rows]
     # 地址逐条试, 保证整条 <= 上限(X 加权)
     tail2 = "\n\n链上数据筛选, 不代表必涨\n不构成投资建议。\n\n你会先查哪一个? 👇"
-    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN, tail2)
-    print(f"  [变体] Meme地址跟帖 -> T{_avid}")
+    # 一条跟帖只放得下 3 个地址(SOL 地址 44 字符 = 44 加权字, 280 上限)。
+    # S 级超过 3 个时不能再截 —— 用户要求 S 的合约地址必须带上, 所以续到跟帖3/4。
+    _threads2, _rest = [], addrs
+    while _rest and len(_threads2) < 3:
+        _avid, _t = _pv.address_thread(_rest, ps.xlen, MAX_TWEET_LEN,
+                                       tail2 if not _threads2 else "\n\n不构成投资建议。")
+        _threads2.append(_t)
+        _used = sum(1 for a in _rest if a in _t)
+        if not _used:                    # 一条都放不下 → 防死循环
+            break
+        _rest = _rest[_used:]
+    thread2 = _threads2[0] if _threads2 else ""
+    print(f"  [变体] Meme地址跟帖 -> T{_avid} ({len(_threads2)} 条, {len(addrs)} 个合约)")
+    # S 级地址一条都不许丢 —— 这是用户点名的要求, 丢了必须喊出来
+    _all_t2 = "\n".join(_threads2)
+    _s_miss = [r.get('symbol') for r in _s_rows if str(r.get('address')) not in _all_t2]
+    if _s_miss:
+        print(f"  ⚠️ S 级地址没进跟帖(超出 {MAX_TWEET_LEN} 加权字): {', '.join(_s_miss)}")
+    _miss = _pv.addr_covered(main, [{'sym': r.get('symbol')} for r in picks], addrs)
+    if _miss:
+        print(f"  ⚠️ 主帖点名但地址跟帖没覆盖: {', '.join(_miss)}")
 
     chart = None
     try:
@@ -171,17 +197,20 @@ def compose_scan():
         chart = x_chart.chart_meme()
     except Exception as e:
         print('观察池出图失败:', str(e)[:80])
-    return {"main": main, "thread": [thread1, thread2],
+    return {"main": main, "thread": [thread1] + _threads2,
             "chart": str(chart) if chart else None,
             "label": "Meme观察池", "addresses": addrs,
             "symbols": [str(r.get('symbol') or '?') for r in picks]}
 
 
 def compose_smart_live():
-    """聪明钱扫货 —— 自建钱包池的最新链上买入。
+    """链上追踪器扫货 —— 币安官方 address-tracker 的最新买入成交。
 
     原在 alpha 的 X 草稿里, 现移到这里: 内容是 SOL/BSC 小币, 属 meme。
     数据源复用 square_publish.smart_live_picks()(只取买入, 方向由链上 Transfer 事件反推)。
+
+    口径(2026-10-21 更正): 这是**币安自己维护的追踪器**(trackerType=1), 不是自建钱包池。
+    实测 SOL 侧与我们那 90 个地址的池子重合 0/32, BSC 侧 5/27 —— 文案不能再说「我盯的钱包池」。
     """
     import sys as _s
     _s.path.insert(0, '/opt/alpha-radar')
@@ -194,14 +223,25 @@ def compose_smart_live():
         return None
     import post_variants as _pv
     _vid, head, items, tail = _pv.smart_live(picks)
-    print(f"  [变体] 聪明钱扫货 -> V{_vid} (n={len(picks)})")
+    print(f"  [变体] 链上追踪扫货 -> V{_vid} (n={len(picks)})")
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
     _tvid, thread = _pv.filter_thread(
-        [('胜率≥55%', '赢的次数要明显多于输的'),
-         ('已实现盈亏≥1万$', '看落袋的, 不看浮盈'),
-         ('交易数≥20', '样本太少说明不了问题')],
+        [('只看买入', '卖出是获利了结, 买入才是新动作'),
+         ('方向反推自链上转账', '钱包在 to=买入 / 在 from=卖出'),
+         ('同名币必须核合约', '本地表里 Heyi 有 33 个合约、Kimchi 有 233 个')],
         column='wallet_filter_thread')
-    print(f"  [变体] 聪明钱扫货跟帖 -> T{_tvid}")
+    print(f"  [变体] 链上追踪扫货跟帖 -> T{_tvid}")
+    # 合约地址跟帖 —— 同名不同币太常见(本地 pairs 表里 Heyi 有 33 个合约、Kimchi 有 233 个),
+    # 不写地址读者搜 ticker 大概率买到另一个币。地址原样大小写, SOL 是 base58 不能小写。
+    # focus_first: V2 会点名的那个币排最前 —— 它按钱包数选, 未必在成交额前几名,
+    # 不提前就会出现「主帖点名、跟帖里没有它」。
+    addrs = _pv.smart_live_addrs(picks, focus_first=True)
+    tail2 = "\n\n链上数据, 不代表必涨\n不构成投资建议。"
+    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN, tail2)
+    print(f"  [变体] 聪明钱扫货地址 -> T{_avid} ({len(addrs)} 个)")
+    _miss = _pv.addr_covered(main, picks, addrs)
+    if _miss:
+        print(f"  ⚠️ 主帖点名但地址跟帖没覆盖: {', '.join(_miss)}")
     chart = None
     try:
         import sys as _s2
@@ -210,8 +250,9 @@ def compose_smart_live():
         chart = x_chart.chart_smart_live(picks)
     except Exception as e:
         print('扫货出图失败:', str(e)[:80])
-    return {"main": main, "thread": [thread], "chart": str(chart) if chart else None,
-            "label": "聪明钱扫货", "symbols": [str(x['sym']) for x in picks[:4]]}
+    return {"main": main, "thread": [thread, thread2], "chart": str(chart) if chart else None,
+            "label": "聪明钱扫货", "addresses": addrs,
+            "symbols": [str(x['sym']) for x in picks[:4]]}
 
 
 def compose_smart_money():
@@ -239,6 +280,29 @@ def compose_smart_money():
     main = ps.compose(head, items, tail, limit=MAX_TWEET_LEN)
     _tvid, thread = _pv.money_thread(fresh, done, cnt, gain)
     print(f"  [变体] 聪明钱买入榜跟帖 -> T{_tvid}")
+    # 合约地址跟帖 —— trading-signal 每条都带 contractAddress, 同名币太多,
+    # 不写地址读者只会搜到同名的另一个币。地址原样, 不小写(SOL base58)。
+    # 顺序 = 重要性(address_thread 从尾部落): fresh[0] 是 V2 点名那个、
+    # done[0] 是 V3 点名那个, 两者都不许因为放不下而被截掉。
+    _rows = [fresh[0]] if fresh else []
+    if done:
+        _rows.append(done[0])
+    _rows += fresh[1:3] + done[1:2]
+    addrs = []
+    _seen_sym = set()
+    for r in _rows:
+        ca = str(r.get('contractAddress') or '').strip()
+        tk = str(r.get('ticker') or '').strip()
+        if not ca or tk.lower() in _seen_sym:
+            continue
+        _seen_sym.add(tk.lower())
+        addrs.append(f"{tk or '?'} ({str(r.get('chainId')) == '56' and 'BSC' or 'SOL'}) {ca}")
+    tail2 = "\n\n数据筛选, 不代表必涨\n不构成投资建议。"
+    _avid, thread2 = _pv.address_thread(addrs, ps.xlen, MAX_TWEET_LEN, tail2)
+    print(f"  [变体] 聪明钱买入榜地址 -> T{_avid} ({len(addrs)} 个)")
+    _miss = _pv.addr_covered(main, [r for r in _rows], addrs)
+    if _miss:
+        print(f"  ⚠️ 主帖点名但地址跟帖没覆盖: {', '.join(_miss)}")
     chart = None
     try:
         import sys as _s2
@@ -247,8 +311,8 @@ def compose_smart_money():
         chart = x_chart.chart_smart_money(d)
     except Exception as e:
         print('买入榜出图失败:', str(e)[:80])
-    return {"main": main, "thread": [thread], "chart": str(chart) if chart else None,
-            "label": "聪明钱买入榜", "symbols": syms}
+    return {"main": main, "thread": [thread, thread2], "chart": str(chart) if chart else None,
+            "label": "聪明钱买入榜", "addresses": addrs, "symbols": syms}
 
 
 LAST_POST = DATA / 'last_post.json'
@@ -357,6 +421,14 @@ def main():
     if args.square and scan:
         ok, out = post_square(square_text(scan))
         print('广场:', '已发' if ok else f'失败 {out}')
+        if not ok:
+            try:
+                sys.path.insert(0, '/opt/content-push')
+                import relay as _relay
+                _relay.send(f'⚠️ [广场] Meme 发布失败\n\n{out[:700]}\n\n'
+                            '这条**没发出去**, 需要手动补发或重跑。')
+            except Exception as e:
+                print('  失败告警发不出去:', str(e)[:80])
     else:
         print('广场: 已跳过(默认不发; 需要时加 --square)')
 

@@ -10,7 +10,7 @@
   square_publish.py --test     发测试帖
 """
 from __future__ import annotations
-import json, os, subprocess, time, argparse
+import json, os, subprocess, sys, time, argparse
 from pathlib import Path
 
 DATA = Path('/var/lib/demon-radar')
@@ -61,6 +61,23 @@ def _relay_square(text, kind='帖子'):
         print(f'  同步到群失败: {str(e)[:80]}')
 
 
+def _relay_fail(kind, out):
+    """发布失败必须吵。
+
+    2026-10-19 广场复盘图片上传超时, post_image 只 print 一下就退出 0,
+    systemd 报 success —— 帖子根本没发出去, 没人知道。
+    """
+    try:
+        import sys as _s
+        _s.path.insert(0, '/opt/content-push')
+        import relay
+        relay.send(f'⚠️ [广场] 发布失败 · {kind}\n\n{(out or "")[:700]}\n\n'
+                   '这条**没发出去**, 需要手动补发或重跑。')
+        print('  已推失败告警')
+    except Exception as e:
+        print(f'  失败告警也发不出去: {str(e)[:80]}')
+
+
 def post_text(text, title=None):
     import post_style as _ps
     for _w in _ps.audit(text, platform='square'):
@@ -71,6 +88,8 @@ def post_text(text, title=None):
     code, out = run_script('post-text.mjs', args)
     if 'Success' in (out or ''):
         _relay_square(text)
+    else:
+        _relay_fail('帖子', out)
     return code, out
 
 
@@ -81,6 +100,8 @@ def post_image(text, images):
     code, out = run_script('post-image.mjs', ['--text', text, '--images', ','.join(images)])
     if 'Success' in (out or ''):
         _relay_square(text, '图文帖')
+    else:
+        _relay_fail('图文帖', out)
     return code, out
 
 
@@ -146,6 +167,15 @@ def safe_cashtag(symbol, contract):
     return str(symbol or '')
 
 
+def _pv_mod():
+    """加载变体池。square_publish 不一定从 /opt/alpha-radar 启动，显式补路径。"""
+    import sys as _s
+    if '/opt/alpha-radar' not in _s.path:
+        _s.path.insert(0, '/opt/alpha-radar')
+    import post_variants
+    return post_variants
+
+
 def compose_scan():
     """观察池: 文字 + 集中度/持仓图。风格见 post_style。"""
     import post_style as ps
@@ -164,15 +194,17 @@ def compose_scan():
     except Exception:
         chart = None
     picks = sa[:3]
-    head = f"我扒了全部币安Alpha代币\n只有 {len(picks)} 个同时过三道筛"
-    items = [f"{'🥇🥈🥉'[i]} {safe_cashtag(x['symbol'], x.get('address'))}  控盘 {x['cleaned_top10']*100:.0f}%\n"
-             f"合约持仓 {x['oi_notional']/1e6:.1f}M USDT"
-             for i, x in enumerate(picks)]
-    tail = ("三道筛: 已上合约 · 未上现货 · 大户控盘≥60%\n"
-            "现货上市前, 是资金布局的窗口\n\n"
-            "这三个你先看哪个?\n\n"
-            "点击币种可看实时行情与合约数据。\n"
-            "数据筛选, 不构成投资建议。")
+    # 变体池：按当天数据特征（个数 / 控盘度差异）选结构，避免每次千篇一律。
+    # 最多 3 个标的，每个变体渲染 ≤3 行 → cashtag 天然不超 3 个上限。
+    _pv = _pv_mod()
+    _p = [{'symbol': safe_cashtag(x['symbol'], x.get('address')),
+           'conc': x['cleaned_top10'] * 100,
+           'oi': x['oi_notional'] / 1e6} for x in picks]
+    _spread = ((_p[0]['conc'] - _p[-1]['conc']) / 100) if len(_p) > 1 else 0.0
+    _vid = _pv.pick('square_scan', n=len(_p), spread=_spread)
+    head, items, tail = _pv.alpha_pool(_vid, _p)
+    print(f"  [变体] 广场观察池 -> V{_vid} (n={len(_p)}, spread={_spread:.2f})")
+    tail += "\n\n点击币种可看实时行情与合约数据。\n数据筛选, 不构成投资建议。"
     text = ps.compose(head, items, tail, limit=2000)
     imgs = [str(chart)] if chart and Path(chart).exists() else []
     return text, imgs
@@ -183,7 +215,6 @@ def compose_review():
     import post_style as ps
     try:
         b = json.loads((DATA / 'baseline.json').read_text())
-        t = json.loads((DATA / 'track_state.json').read_text())
     except Exception:
         return None, []
     try:
@@ -193,37 +224,35 @@ def compose_review():
         chart = x_chart.chart_review()
     except Exception:
         chart = None
-    ups, downs = [], []
-    for m in b.get('matches', [])[:5]:
-        sym = m['symbol']
-        cur = t.get('oi_snap', {}).get(sym) or _oi(m)
-        base = _oi(m)
-        if base > 0:
-            chg = (cur / base - 1) * 100
-            if chg >= 5:
-                ups.append((sym, chg, base / 1e6, cur / 1e6, m.get('address')))
-            elif chg <= -5:
-                downs.append((sym, chg, base / 1e6, cur / 1e6, m.get('address')))
-    n_up, n_down = len(ups), len(downs)
-    if n_up and not n_down:
-        head = f"{n_up} 个Alpha币被资金加仓\n钱在往哪走?"
-    elif n_down and not n_up:
-        head = f"{n_down} 个Alpha币遭资金撤退\n谁在被抛弃?"
-    elif n_up and n_down:
-        head = f"复盘: {n_up} 个加仓 · {n_down} 个撤退\n钱在换仓"
-    else:
-        head = "复盘: 持仓整体平稳\n没异动, 也是一种信号"
-    # 币安广场单帖 cashtag 服务端上限 3 个(超出报 220095 Coin pair count), 按剩余名额挂。
+    # 当前持仓取 matches.json（demon-scan 每小时刷新，覆盖 S/A 全档）。
+    # 不能用 track_state.json 的 oi_snap —— demon_track 只跟踪 S 档，
+    # 掉档币的值会冻结在掉档那一刻（AGT 曾因此被写成 -85%）。见 oi_now 注释。
+    import oi_now
+    ups, downs = oi_now.review_moves(b.get('matches', []))
+    # 币安广场单帖 cashtag 服务端上限 3 个(超出报 220095 Coin pair count)。
+    # 变体池不知道这条，所以**先按渲染顺序把 3 个名额分掉**，再交给变体渲染。
+    # 名额顺序：加仓第 1、2 名 → 撤退第 1 名 → 其余（V1 只渲染 ups[:3]，
+    # V2 只渲染 downs[:3]，V3 渲染 ups[:2]+downs[:2]，V5 两边各 3 —— 都不超 3 个）。
     used = 0
-    items = []
-    for sym, chg, b0, c0, addr in (ups[:2] + downs[:1])[:3]:
-        arrow = '🔺' if chg > 0 else '🔻'
-        tag = safe_cashtag(sym, addr)          # 用该币自己的合约地址, 不是循环泄漏的 m
-        if tag.startswith('$'):
+    _order = []
+    for _k in range(max(len(ups), len(downs))):
+        if _k < len(ups):
+            _order.append(('u', _k))
+        if _k < len(downs):
+            _order.append(('d', _k))
+    _tagged = {'u': {}, 'd': {}}
+    for _side, _i in _order:
+        _row = ups[_i] if _side == 'u' else downs[_i]
+        _tag = safe_cashtag(_row[0], _row[4])   # 用该币自己的合约地址
+        if _tag.startswith('$') and used < 3:
             used += 1
-        items.append(f"{arrow} {tag}  {chg:+.0f}%\n{b0:.1f}M → {c0:.1f}M USDT")
-    if not items:
-        items.append("较上一基线无 ±5% 以上变动")
+            _tagged[_side][_i] = _tag
+    _u4 = [(_tagged['u'].get(i) or r[0], r[1], r[2], r[3]) for i, r in enumerate(ups)]
+    _d4 = [(_tagged['d'].get(i) or r[0], r[1], r[2], r[3]) for i, r in enumerate(downs)]
+    # 变体池：按当天形状（有进有出 / 单边 / 平稳）选结构，并排除上次用过的
+    _pv = _pv_mod()
+    _vid, head, items, tail = _pv.alpha_review(_u4, _d4)
+    print(f"  [变体] 广场复盘 -> V{_vid} (加仓{len(ups)} 撤退{len(downs)})")
     try:
         cur = json.loads((DATA / 'matches.json').read_text())
     except Exception:
@@ -241,10 +270,7 @@ def compose_review():
             ct_s = f"  控盘 {ct*100:.0f}%" if ct else ''
             pool.append(f"{cand}  持仓 {_oi(m)/1e6:.1f}M USDT{ct_s}")
         items.append('\n'.join(pool))
-    tail = ("持仓上升 = 资金在布局\n"
-            "持仓下降 = 资金在撤退\n\n"
-            "明天早帖给新的观察池。\n"
-            "数据筛选, 不构成投资建议。")
+    tail += "\n\n明天早帖给新的观察池。\n数据筛选, 不构成投资建议。"
     text = ps.compose(head, items, tail, limit=2000)
     imgs = [str(chart)] if chart and Path(chart).exists() else []
     return text, imgs
@@ -441,10 +467,56 @@ def post_signals(max_posts=3):
     print(f'本轮发送 {sent} 条信号帖')
 
 
-def smart_live_picks(max_mc=50e6, size=50):
-    """自建钱包池的最新链上**买入**, 已按成交额降序。返回 [{sym, cn, qsym, amt, mc, tag}]。
+STOCK_TAG = 'Tokenized Stocks Launch Platform'
+_STOCK_CA = None
 
-    数据源: 币安官方链上追踪 address-tracker/trades (trackerType=1 = 我们建的钱包池)。
+
+def _is_tokenized_stock(row):
+    """代币化美股 —— 加密栏目里不该出现（读者要的是币，不是股票）。"""
+    return STOCK_TAG in (row.get('tokenTag') or {})
+
+
+def tokenized_stock_contracts():
+    """代币化美股的合约地址集合（缓存 1 次/进程）。
+
+    为什么需要：`smart_live` 用的链上成交流水接口**不带 tag**，没法直接判，
+    只能拿 trading-signal 里带 tag 的那批合约地址来对。
+    （覆盖不到「当前没被信号跟踪」的股票币，但比完全不筛强。）
+    """
+    global _STOCK_CA
+    if _STOCK_CA is not None:
+        return _STOCK_CA
+    out = set()
+    try:
+        import bn_skills
+        for _chain, _cid in (('bsc', bn_skills.CHAIN_BSC),
+                             ('solana', bn_skills.CHAIN_SOL)):
+            try:
+                for r in bn_skills.smart_money(chain_id=_cid, page_size=100):
+                    if _is_tokenized_stock(r):
+                        ca = str(r.get('contractAddress') or '').strip().lower()
+                        if ca:
+                            out.add(ca)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _STOCK_CA = out
+    return out
+
+
+def smart_live_picks(max_mc=50e6, size=50):
+    """币安链上追踪器的最新**买入**, 已按成交额降序。
+
+    返回 [{sym, cn, qsym, amt, n, wallets, mc, ca, tag}]
+      n       = 成交笔数（txHash 去重后）
+      wallets = 去重后的**不同钱包数**（文案说「N 个地址」只能用这个）
+      ca      = 合约地址**原样大小写**（SOL 是 base58, lower() 会得到另一个不存在的地址）
+
+    数据源: 币安官方链上追踪 address-tracker/trades。
+    ⚠️ trackerType=1 是**币安自己维护的追踪器**, 不是我们自建的钱包池
+       (实测 2026-10-21: SOL 侧与我们 90 个地址的池子重合 0/32, BSC 侧 5/27)。
+       文案不可以说「我盯的钱包池」。
     方向: 只保留买入 —— tradeType 3/5 已用链上 Transfer 事件反推确认(见 T3.1)。
     市值上限: 读者要的是"还没涨起来的", 报一个 35 亿的成熟币没意义。
     """
@@ -456,6 +528,7 @@ def smart_live_picks(max_mc=50e6, size=50):
         return []
 
     TT_BUY = {'3', '5'}
+    _stocks = tokenized_stock_contracts()
     CH = {'56': ('BSC', 'BNB'), 'CT_501': ('SOL', 'SOL')}
     seen_tx = set()
     agg = {}
@@ -477,28 +550,40 @@ def smart_live_picks(max_mc=50e6, size=50):
             mc = _f(t.get('marketCap'))
             if not amt or not mc or mc > max_mc:
                 continue
-            ca = str(t.get('tokenContractAddress') or '').lower()
+            ca_raw = str(t.get('tokenContractAddress') or '').strip()
+            ca = ca_raw.lower()        # SOL 是 base58, 大小写敏感 —— 小写版只用于查表/去重
+            if ca and ca in _stocks:
+                continue               # 代币化美股, 不是币
             sym = t.get('tokenSymbol') or '?'
             k = ca or f'{cn}:{sym.lower()}'
+            wa = str(t.get('walletAddress') or '').lower()
             if k in agg:
                 agg[k]['amt'] += amt
                 agg[k]['n'] += 1
+                agg[k]['wallets'].add(wa)
                 agg[k]['mc'] = mc          # 市值取最新
             else:
                 agg[k] = {'sym': sym, 'cn': cn, 'qsym': qsym, 'amt': amt, 'n': 1, 'mc': mc,
-                          'tag': safe_cashtag(sym, t.get('tokenContractAddress'))}
+                          'ca': ca_raw, 'wallets': {wa},
+                          'tag': safe_cashtag(sym, ca_raw)}
     out = list(agg.values())
+    for x in out:
+        # wallets = 去重后的钱包数，n = 成交笔数。文案只能用 wallets ——
+        # 一个钱包连买 9 笔不等于 9 个地址在买
+        # (2026-10-21 实测 Heyi: 10 笔来自 2 个钱包, 草稿却写「8 个地址」)。
+        x['wallets'] = len(x['wallets'])
     out.sort(key=lambda x: -x['amt'])
     return out
 
 
 def compose_smart_live():
-    """新栏目「聪明钱刚买了什么」—— 来自币安官方链上追踪(address-tracker/trades)。
+    """新栏目「链上追踪器刚买了什么」—— 来自币安官方 address-tracker/trades。
 
     与已有的「聪明钱买入榜」不同: 那个是 trading-signal 的每笔信号;
-    这个是**我们自建的钱包池**(币安排行榜筛出: 胜率>=55% 且 已实现盈亏>=1万$ 且 交易数>=20)
-    的**最新链上成交**, 且带买卖方向(方向由链上 Transfer 事件反推:
-    钱包在 to=买入 / 在 from=卖出)。
+    这个是**币安自己维护的链上追踪器**的最新成交, 且带买卖方向
+    (方向由链上 Transfer 事件反推: 钱包在 to=买入 / 在 from=卖出)。
+
+    ⚠️ 不是我们自建的钱包池 —— 实测 2026-10-21 SOL 侧重合 0/32、BSC 侧 5/27。
 
     只取买入 —— "聪明钱刚买了什么"才有信息量; 卖出是他们的获利了结, 对读者参考价值低。
     """
@@ -506,13 +591,19 @@ def compose_smart_live():
     picks = smart_live_picks()
     if not picks:
         return None, []
-    head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
-    items = [f"🟢 {x['tag']}  {x['mc']/1e6:.2f}M$\n{x['n']} 笔买入 {x['amt']:.3g} {x['qsym']}"
-             for x in picks[:4]]
-    tail = ("钱包池 = 币安官方排行榜筛出的实盘赢家\n"
-            "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-            "只列买入 —— 他们卖出是获利了结。\n"
-            "数据筛选, 不构成投资建议。")
+    # 广场单帖 cashtag 上限 3 个：只给「前两名 + V2 会聚焦的那一名」挂 $。
+    # 各变体渲染的都是 picks[:4]，所以单帖里最多同时出现 {0,1,argmax} 三个 $，不超限。
+    # V2「最集中」现在按钱包数选, 这里挂 $ 必须用同一口径, 否则 V2 聚焦的那个币挂不上 $。
+    _am = max(range(len(picks)), key=lambda i: (int(picks[i].get('wallets') or 0),
+                                                int(picks[i].get('n') or 0)))
+    _keep = {0, 1, _am}
+    picks = [dict(p, tag=(p['tag'] if i in _keep else p['sym']))
+             for i, p in enumerate(picks)]
+    # 变体池：按笔数 / 市值分布选结构（清单 / 聚焦 / 对比 / 观察），排除上次用过的
+    _pv = _pv_mod()
+    _vid, head, items, tail = _pv.smart_live(picks)
+    print(f"  [变体] 广场聪明钱实时 -> V{_vid} (n={len(picks)})")
+    tail += "\n\n数据筛选, 不构成投资建议。"
     return ps.compose(head, items, tail, limit=2000), []
 
 
@@ -542,6 +633,9 @@ def smart_money_picks():
         except Exception:
             continue
     buys = [r for r in rows if str(r.get('direction', '')).lower() == 'buy']
+    # 剔代币化美股（Backpack / PreStocks 上的 CHWY / TSM / OPENAI 等）——
+    # 这是加密栏目, 发「聪明钱在买 CHWY」对读者没意义。
+    buys = [r for r in buys if not _is_tokenized_stock(r)]
     if not buys:
         return None
 
@@ -589,29 +683,24 @@ def compose_smart_money():
     d = smart_money_picks()
     if not d:
         return None, []
-    fresh, done, hook, cnt, gain = d['fresh'], d['done'], d['hook'], d['cnt'], d['gain']
-    head = f"聪明钱刚扫货\n{cnt(hook)} 个地址同时买入同一个币"
-    used = 0
-    items = []
-    if fresh:
-        block = ["🟢 刚触发(还没怎么涨)"]
-        for r in fresh[:2]:
-            if used >= 3:
-                break
-            block.append(f"{safe_cashtag(r.get('ticker'), r.get('contractAddress'))}  "
-                         f"{cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
-            used += 1
-        items.append('\n'.join(block))
-    if done and used < 3:
-        block = ["🔥 已兑现(信号历史战绩)"]
-        for r in done[:3 - used]:
-            block.append(f"{safe_cashtag(r.get('ticker'), r.get('contractAddress'))}  "
-                         f"{cnt(r)} 人买入  触发后 {gain(r):+.0f}%")
-            used += 1
-        items.append('\n'.join(block))
-    tail = ("聪明钱 = 链上被持续跟踪的专业地址\n"
-            "他们买什么, 往往先于市场热度\n\n"
-            "数据筛选, 不构成投资建议。")
+    fresh, done, cnt, gain = d['fresh'], d['done'], d['cnt'], d['gain']
+    # 广场单帖 cashtag 上限 3 个 —— 名额给「刚触发前两名 + 已兑现第一名」。
+    # 正好覆盖各变体的取数方式：V1 渲染 fresh[:2]+done[:2]（3 个 $）、
+    # V2 取 fresh 里人最多的（= fresh[0]，列表已按人数降序）、
+    # V3 取 done 里涨幅最高的（= done[0]，列表已按涨幅降序）。
+    _budget = {('f', 0), ('f', 1), ('d', 0)}
+
+    def _tag_rows(rows, side):
+        return [dict(r, ticker=safe_cashtag(r.get('ticker'), r.get('contractAddress')))
+                if (side, i) in _budget else r
+                for i, r in enumerate(rows)]
+
+    fresh, done = _tag_rows(fresh, 'f'), _tag_rows(done, 'd')
+    # 变体池：按信号形状（有进有出 / 只有一边 / 很少）选结构，排除上次用过的
+    _pv = _pv_mod()
+    _vid, head, items, tail = _pv.smart_money(fresh, done, cnt, gain)
+    print(f"  [变体] 广场聪明钱信号 -> V{_vid} (fresh={len(fresh)} done={len(done)})")
+    tail += "\n\n数据筛选, 不构成投资建议。"
     return ps.compose(head, items, tail, limit=2000), []
 
 
@@ -672,6 +761,9 @@ def main():
     else:
         code, out = post_text(text)
     print(out)
+    # 别让 systemd 报 success —— 发失败就是失败
+    if 'Success' not in (out or ''):
+        sys.exit(1)
 
 
 if __name__ == '__main__':

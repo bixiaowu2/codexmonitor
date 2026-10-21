@@ -160,7 +160,9 @@ def chart_smart_live(picks=None, top=6):
     units = [x['qsym'] for x in picks]
     chains = [x['cn'] for x in picks]
     mcs = [float(x['mc']) for x in picks]
-    ns = [int(x.get('n') or 1) for x in picks]
+    ns = [int(x.get('n') or 1) for x in picks]                       # 成交笔数
+    # 去重钱包数：一个钱包连买 9 笔只算 1 个地址，图上两个数都给，口径不混淆
+    nw = [int(x['wallets']) if x.get('wallets') is not None else None for x in picks]
 
     # 按链分色(同一链同色), 便于看出单位差异
     palette = {'SOL': BLUE, 'BSC': GOLD, 'ETH': '#a371f7', 'BASE': '#3fb950'}
@@ -177,8 +179,9 @@ def chart_smart_live(picks=None, top=6):
     ax.grid(axis='x', color=GRID, linewidth=0.6)
     ax.grid(axis='y', visible=False)
 
-    for yi, amt, u, mc, n in zip(y, amts, units, mcs, ns):
-        ax.text(amt * 1.02, yi, f"{amt:.3g} {u} · {mc/1e6:.2f}M$ · {n}笔",
+    for yi, amt, u, mc, n, w in zip(y, amts, units, mcs, ns, nw):
+        _w_s = f"{w}地址/" if w is not None else ""
+        ax.text(amt * 1.02, yi, f"{amt:.3g} {u} · {mc/1e6:.2f}M$ · {_w_s}{n}笔",
                 va='center', color=FG, fontsize=10)
     ax.set_xlim(0, max(amts) * 1.55)
 
@@ -259,38 +262,45 @@ def chart_review():
     """复盘: S级持仓 vs 集中度双指标。"""
     try:
         b = json.loads(Path('/var/lib/demon-radar/baseline.json').read_text())
-        t = json.loads(Path('/var/lib/demon-radar/track_state.json').read_text())
     except Exception:
         return None
-    rows = b.get('matches', [])[:5]
-    if not rows:
-        return None
+    # 当前持仓取 matches.json，不取会冻结的 oi_snap（见 oi_now 注释）。
+    # 取不到当前值的币**直接不画** —— 画成 0 会看起来像"持仓清零"。
+    import oi_now
+    _now = oi_now.current_oi()
     names, now_oi, base_oi = [], [], []
-    for m in rows:
+    for m in b.get('matches', [])[:5]:
         sym = m['symbol']
-        cur = t.get('oi_snap', {}).get(sym)
+        cur = _now.get(sym)
         base = m.get('oi_notional') or m.get('oi')   # 字段名中途改过, 兼容两种
+        if not cur or not base:
+            continue
         names.append(sym)
-        now_oi.append((cur or 0) / 1e6)
-        base_oi.append((base or 0) / 1e6)
+        now_oi.append(cur / 1e6)
+        base_oi.append(base / 1e6)
+    if not names:
+        return None
 
     import numpy as np
     y = np.arange(len(names))
     fig, ax = plt.subplots(figsize=(9, 4.6), facecolor=BG)
     ax.barh(y + 0.2, base_oi, height=0.38, color='#30363d', label='基线持仓')
-    colors = [GREEN if n >= b else RED for n, b in zip(now_oi, base_oi)]
+    # ±1% 以内算持平 —— 把 -0.03% 涂成红色「撤退」会误导读者
+    _chg = [(n / b - 1) * 100 for n, b in zip(now_oi, base_oi)]
+    colors = [GREEN if c >= 1 else RED if c <= -1 else '#8b949e' for c in _chg]
     ax.barh(y - 0.2, now_oi, height=0.38, color=colors, label='当前持仓')
     ax.set_yticks(y)
     ax.set_yticklabels(names)
     ax.set_xlabel('合约持仓名义（百万 USDT）', color=FG, fontsize=11)
-    ax.set_title('Alpha雷达日复盘 · S级合约持仓变化', color=GOLD, fontsize=15, pad=14)
+    ax.set_title('Alpha雷达日复盘 · 合约持仓变化', color=GOLD, fontsize=15, pad=14)
     _style(ax)
     # 柱子的颜色表示**涨跌方向**, 不是"当前持仓"这一种颜色 ——
     # 原来图例只写"当前持仓(红)", 而实际涨的是绿的, 图例与配色对不上会误导。
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(color='#30363d', label='基线持仓'),
                        Patch(color=GREEN, label='当前持仓 ↑ 加仓'),
-                       Patch(color=RED, label='当前持仓 ↓ 撤退')],
+                       Patch(color=RED, label='当前持仓 ↓ 撤退'),
+                       Patch(color='#8b949e', label='当前持仓 · 持平(±1%)')],
               facecolor=BG, edgecolor=GRID, labelcolor=FG, loc='lower right')
     fig.text(0.01, 0.01, '持仓上升 = 资金在布局　持仓下降 = 资金在撤退',
              color=MUTED, fontsize=9.5)

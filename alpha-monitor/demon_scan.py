@@ -51,16 +51,18 @@ def telegram_send(token, chat, text):
 
 
 def dingtalk_send(env, text):
+    # 返回 True 才算真发出去(见 demon_track.py 同名函数注释)。2026-10-21 修。
     if env.get('DEMON_DINGTALK_ENABLED', env.get('DINGTALK_ENABLED', 'false')).strip().lower() != 'true':
-        return
+        return False
     cfg = types.SimpleNamespace(
         ding_webhook=secret(env, 'DINGTALK_WEBHOOK'),
         ding_secret=secret(env, 'DINGTALK_SECRET'),
         ding_keyword=env.get('DINGTALK_KEYWORD', 'Alpha雷达').strip(),
     )
     if not cfg.ding_webhook:
-        return
+        return False
     dingtalk.send(cfg, text)
+    return True
 
 
 def cleaned_top10(raw):
@@ -231,8 +233,8 @@ def main():
             except Exception as e:
                 print('telegram send failed:', str(e)[:120])
         try:
-            dingtalk_send(env, msg)
-            print('dingtalk: sent')
+            if dingtalk_send(env, msg):
+                print('dingtalk: sent')
         except Exception as e:
             print('dingtalk send failed:', str(e)[:120])
         state['last_notify'] = time.time()

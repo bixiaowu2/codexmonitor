@@ -119,16 +119,19 @@ def telegram_send(token, chat, text):
 
 
 def dingtalk_send(env, text):
+    # 返回 True 才算真发出去。原写法无论发没发, 调用方都 print('dingtalk: sent'),
+    # 日志会骗人(DEMON_DINGTALK_ENABLED=false 时也打 sent)。2026-10-21 修。
     if env.get('DEMON_DINGTALK_ENABLED', env.get('DINGTALK_ENABLED', 'false')).strip().lower() != 'true':
-        return
+        return False
     cfg = types.SimpleNamespace(
         ding_webhook=secret(env, 'DINGTALK_WEBHOOK'),
         ding_secret=secret(env, 'DINGTALK_SECRET'),
         ding_keyword=env.get('DINGTALK_KEYWORD', 'Alpha雷达').strip(),
     )
     if not cfg.ding_webhook:
-        return
+        return False
     dingtalk.send(cfg, text)
+    return True
 
 
 def fetch_price(api, futs):
@@ -182,8 +185,8 @@ def notify(env, token, chat, body):
         except Exception as e:
             print('telegram fail:', str(e)[:100])
     try:
-        dingtalk_send(env, body)
-        print('dingtalk: sent')
+        if dingtalk_send(env, body):
+            print('dingtalk: sent')
     except Exception as e:
         print('dingtalk fail:', str(e)[:100])
 
@@ -290,6 +293,10 @@ def main():
                 sq_events.append({"kind": "持仓", "symbol": sym, "futures": futs, "text": _msg, "ts": time.time(), "oi": oi, "prev": prev, "address": m.get('address')})
             oi_snap[sym] = oi
 
+    # oi_snap 只保留本轮的 S 档 —— 否则掉档币的值永久残留，
+    # 等它回到 S 档时会被当成「前期」比，误报「持仓异动」。
+    _alive = {m['symbol'] for m in s_tier}
+    oi_snap = {k: v for k, v in oi_snap.items() if k in _alive}
     state.update({'drawn_symbols': list(drawn), 'drawn_dd': drawn_dd, 'drawn_ts': drawn_ts, 'fr_alerted': list(fr_alerted), 'oi_snap': oi_snap, 'tp_hit': list(tp_hit), 'last_run': time.time()})
     STATE.write_text(json.dumps(state, ensure_ascii=False))
     if tdb is not None:

@@ -22,6 +22,7 @@
 """
 import json
 import random
+import re
 from pathlib import Path
 
 STATE = Path('/var/lib/alpha-radar/variant_state.json')
@@ -40,6 +41,25 @@ def _save(d):
         STATE.write_text(json.dumps(d, ensure_ascii=False), encoding='utf-8')
     except Exception:
         pass
+
+
+# ---- 结尾 hashtag：每个变体一个，跟着变体轮换 ----
+# 原来 5 个变体结尾 hashtag 完全一样 → 实测 12 条里 11 条结尾一致。
+_TAGS = {
+    'alpha': ['#BinanceAlpha', '#BinanceAlpha #Crypto', '#Alpha #Binance',
+              '#Binance #Alpha', '#Alpha #Crypto'],
+    'meme': ['#MemeCoin #Crypto', '#MemeCoin', '#Meme #Crypto',
+             '#MemeCoin #Binance', '#Meme #Binance'],
+}
+_TAG_RE = re.compile(r'#\w+(?:\s+#\w+)*\s*$')
+
+
+def _retag(tail, vid, family):
+    """把结尾 hashtag 换成该变体专属的。tail 是帖子最后一段。"""
+    if not tail:
+        return tail
+    tag = _TAGS[family][(vid - 1) % len(_TAGS[family])]
+    return _TAG_RE.sub(tag, tail.rstrip())
 
 
 def _rotate(column, allowed, limit=None):
@@ -72,9 +92,9 @@ def pick(column, n=0, spread=0.0, has_anomaly=False):
     if n <= 1:
         cands = [2, 5]              # 聚焦型 / 观察型
     elif n == 2:
-        cands = [3, 5, 2]           # 对比 / 观察 / 聚焦
+        cands = [3, 5, 2, 6]        # 对比 / 观察 / 聚焦 / 递进
     else:
-        cands = [1, 3, 5]           # 清单 / 对比 / 观察
+        cands = [1, 3, 5, 6, 7]     # 清单 / 对比 / 观察 / 递进 / 失效条件
 
     if has_anomaly:
         cands = [4] + cands         # 有异常 → 悬念型插到最前
@@ -84,7 +104,8 @@ def pick(column, n=0, spread=0.0, has_anomaly=False):
     # 去重，保持优先级顺序
     seen = set()
     cands = [c for c in cands if not (c in seen or seen.add(c))]
-    return _rotate(column, cands, limit=3)
+    # 不截断 —— 候选本身就是「适配这个数据形状」的集合，截断只会砍掉多样性
+    return _rotate(column, cands)
 
 
 # ============================================================
@@ -132,7 +153,7 @@ def alpha_pool(vid, picks, n_smart=None, threads=None):
                 "我的筛选里「未上现货」是硬条件\n\n"
                 "你觉得这个条件该不该留? 👇\n#BinanceAlpha")
 
-    else:             # 5 观察型
+    elif vid == 5:    # 观察型
         head = f"今天 Alpha 池比较安静\n只有 {n} 个过筛"
         items = [f"{s}  控盘 {c:.0f}%" for s, c, _ in syms]
         tail = ("我盯的池子没有新面孔\n"
@@ -140,7 +161,26 @@ def alpha_pool(vid, picks, n_smart=None, threads=None):
                 "这种时候我不发新东西也行\n\n"
                 "你更想看哪种? 👇\n#BinanceAlpha")
 
-    return head, items, tail
+    elif vid == 6:    # 递进型 —— 按确定性排序，并说明排序逻辑
+        rows = [f"{i}. {s}  控盘 {c:.0f}%\n持仓 {o:.1f}M USDT"
+                for i, (s, c, o) in enumerate(syms, 1)]
+        head = "这三个不是一样的\n我按把握大小排了序"
+        items = rows
+        tail = ("排在前面的, 控盘更集中\n"
+                "把握大不等于会涨, 只是筹码更稳\n\n"
+                "我会先盯第一个\n\n"
+                "你会怎么排? 👇\n#BinanceAlpha")
+
+    else:             # 7 失效条件型 —— 诚实给「什么情况下逻辑不成立」
+        items = [f"{s}  控盘 {c:.0f}%" for s, c, _ in syms]
+        head = f"这三个同时过了筛\n但逻辑会失效"
+        tail = ("两种情况我会把它们划掉:\n"
+                "① 现货一上, 布局窗口就没了\n"
+                "② 大户控盘掉到 60% 以下\n\n"
+                "所以我每天重筛一遍\n\n"
+                "你会设什么退出条件? 👇\n#BinanceAlpha")
+
+    return head, items, _retag(tail, vid, 'alpha')
 
 
 # ============================================================
@@ -152,17 +192,20 @@ def alpha_review(ups, downs):
 
     数据形状决定哪些变体成立（不能写「0 个撤退」这种自相矛盾的标题），
     再在成立的变体里轮换。返回 (vid, head, items, tail)。
+
+    V6 是唯一的**故事型**：不从结论起头，从一个具体时刻起头。
+    依据是 6 篇 X 拆解 —— 同样信息量，故事型 9,290 看 / 干货型 1,284 看。
     """
     nu, nd = len(ups), len(downs)
 
     if nu and nd:
-        allowed = [1, 3, 2, 5]     # 单边加仓 / 换仓 / 单边撤退 / 观察
+        allowed = [1, 3, 2, 5, 6]  # 单边加仓 / 换仓 / 单边撤退 / 观察 / 自述
     elif nu:
-        allowed = [1, 5]           # 只有加仓（V3 需要两边都有，不能用）
+        allowed = [1, 5, 6]        # 只有加仓（V3 需要两边都有，不能用）
     elif nd:
-        allowed = [2, 5]           # 只有撤退
+        allowed = [2, 5, 6]        # 只有撤退
     else:
-        allowed = [4]              # 平稳
+        allowed = [4]              # 平稳（V6 要有异动才成立）
 
     vid = _rotate('alpha_review', allowed)
 
@@ -201,6 +244,36 @@ def alpha_review(ups, downs):
                 "看的是连续几天的方向\n\n"
                 "你更在意单日还是趋势? 👇\n#BinanceAlpha")
 
+    elif vid == 6:    # 自述型 —— 从「一个具体时刻 + 一个对不上的数」讲起, 不从清单讲起
+        if nu and nd:
+            _a, _b = ups[0], downs[0]
+            head = "今天筛池子的时候\n有两个数对不上"
+            items = [f"{_a[0]} 一天进 {_a[1]:+.0f}%",
+                     f"{_b[0]} 一天撤 {_b[1]:+.0f}%",
+                     "同一个池子, 方向相反"]
+        elif nu:
+            _a = ups[0]
+            head = "今天筛池子的时候\n有个数不对劲"
+            # nu > 1 时不能说「另外几个一动不动」—— 其他几个也在涨, 只是没这么猛
+            _rest = ("其他几个没它这么猛" if nu > 1
+                     else "同一个池子里, 另外几个一动不动")
+            items = [f"{_a[0]} 持仓 {_a[2]:.1f}M → {_a[3]:.1f}M",
+                     f"一天 {_a[1]:+.0f}%",
+                     _rest]
+        else:
+            _b = downs[0]
+            head = "今天筛池子的时候\n有个币在往外走"
+            # 这个分支 nu==0, 没有「进」可比, 不能说「撤得比进得干脆」
+            _rest = ("其他几个没它撤得多" if nd > 1
+                     else "同一个池子里, 只有它在动")
+            items = [f"{_b[0]} 持仓 {_b[2]:.1f}M → {_b[3]:.1f}M",
+                     f"一天 {_b[1]:+.0f}%",
+                     _rest]
+        tail = ("我说不清这是布局还是接盘\n"
+                "单日变动本来就说明不了什么\n\n"
+                "我把它记下来了, 明天再看\n\n"
+                "你会把这种异动当信号吗? 👇\n#BinanceAlpha")
+
     else:             # 4 平稳
         head = "今天持仓整体平稳\n没异动"
         items = ["今天 0 个标的变动超过 ±5%", "没异动也是一种信号"]
@@ -208,7 +281,7 @@ def alpha_review(ups, downs):
                 "但记录还是要记\n\n"
                 "你会在意这种「没变化」吗? 👇\n#BinanceAlpha")
 
-    return vid, head, items, tail
+    return vid, head, items, _retag(tail, vid, 'alpha')
 
 
 # ============================================================
@@ -247,9 +320,9 @@ def meme_pool(picks):
     mc_s = f", 市值都 ≤{max(mcs) / 1e6:.2f}M$" if mcs and len(mcs) == n else ""
 
     if n >= 3:
-        allowed = [1, 3]
+        allowed = [1, 3, 6, 7]
     elif n == 2:
-        allowed = [3, 2]
+        allowed = [3, 2, 6]
     else:
         allowed = [2]
     if n_smart == 0:
@@ -302,14 +375,30 @@ def meme_pool(picks):
                 "我不直接点名, 免得变成喊单\n\n"
                 "你看出来是哪个了吗? 👇\n#MemeCoin #Crypto")
 
-    else:             # 5 观察型（只在没有聪明钱时出现）
+    elif vid == 5:    # 观察型（只在没有聪明钱时出现）
         head = f"今天 meme 池比较安静\n只有 {n} 个集中度够低"
         items = [_m_row(p) for p in picks]
         tail = ("没有聪明钱进场的时候\n"
                 "我一般只看不动\n\n"
                 "你会空仓等吗? 👇\n#MemeCoin #Crypto")
 
-    return vid, head, items, tail
+    elif vid == 6:    # 递进型 —— 按风险排序
+        head = "这几个我按风险排了序\n最稳的放前面"
+        items = [_m_line(p) for p in picks]
+        tail = ("集中度越低越稳\n"
+                "但也越没人拉盘\n\n"
+                "我一般先看稳的那头\n\n"
+                "你会怎么选? 👇\n#MemeCoin #Crypto")
+
+    else:             # 7 失效条件型
+        head = "这几个现在数据还行\n但有两种情况我会划掉"
+        items = [_m_row(p) for p in picks]
+        tail = ("① 集中度突然升高 —— 有人在收筹\n"
+                "② 聪明钱开始卖 —— 逻辑就没了\n\n"
+                "所以我每天重筛一遍\n\n"
+                "你会盯哪个信号? 👇\n#MemeCoin #Crypto")
+
+    return vid, head, items, _retag(tail, vid, 'meme')
 
 
 # ============================================================
@@ -323,12 +412,17 @@ def _mc_str(v):
 
 
 def smart_live(picks):
-    """picks: [{'tag','mc','n','amt','qsym'}]，mc 是 USD。
+    """picks: [{'tag','mc','n','wallets','ca','amt','qsym'}]，mc 是 USD。
 
     返回 (vid, head, items, tail)。「动得很轻」只在笔数确实少时才用。
+
+    口径纪律(2026-10-21)：`n` = 成交笔数，`wallets` = 去重钱包数。
+    文案里说「N 个地址」时必须用 wallets —— 一个钱包连买 9 笔只算 1 个地址。
     """
     n = len(picks)
-    mx = max((int(p.get('n') or 0) for p in picks), default=0)
+    _w = _wallets            # 局部别名，保持下面文案里的写法不变
+
+    mx = max((int(p.get('n') or 0) for p in picks), default=0)   # 变体选择仍按笔数(保持原行为)
     mcs = [float(p['mc']) for p in picks if p.get('mc')]
 
     if n >= 3 and len(mcs) > 1:
@@ -345,41 +439,114 @@ def smart_live(picks):
         return _mc_str(p['mc']) if p.get('mc') else '市值未知'
 
     if vid == 1:      # 清单型
-        head = "我盯的钱包池刚扫货\n全是 5000 万$ 市值以下的"
+        head = "链上追踪器刚扫到的货\n全是 5000 万$ 市值以下的"
         items = [f"🟢 {p['tag']}  {_mc(p)}\n"
                  f"{p['n']} 笔买入 {p['amt']:.3g} {p['qsym']}" for p in picks[:4]]
-        tail = ("钱包池 = 币安排行榜筛出的实盘赢家\n"
-                "胜率≥55% · 已实现盈亏≥1万$ · 交易数≥20\n\n"
-                "我只列买入 —— 卖出是获利了结\n"
+        tail = ("数据 = 币安官方链上追踪器的成交\n"
+                "方向由链上转账事件反推, 只留买入\n\n"
+                "卖出是获利了结, 买入才是新动作\n"
                 "你盯过这个池子吗? 👇\n#Binance #MemeCoin")
 
     elif vid == 2:    # 聚焦型
-        p = max(picks, key=lambda x: int(x.get('n') or 0))
-        head = f"钱包池今天最集中的一笔\n{p['n']} 个地址在买 {p['tag']}"
+        # 按「钱包数」选，笔数只做并列时的次序 —— 「最集中」说的是几个地址，不是几笔
+        p = smart_live_focus(picks)
+        head = f"今天最集中的一笔链上买入\n{_w(p)} 个地址在买 {p['tag']}"
         items = [f"{p['tag']}  {_mc(p)}\n{p['n']} 笔 {p['amt']:.3g} {p['qsym']}"]
         tail = ("我盯的是重合度\n"
-                "同一个币被多个赢家地址同时买\n"
+                "同一个币被多个不同地址同时买\n"
                 "比单笔大额更值得看\n\n"
                 "你怎么看? 👇\n#Binance #MemeCoin")
 
     elif vid == 3:    # 对比型
-        hi = max(picks, key=lambda x: x['mc'])
-        lo = min(picks, key=lambda x: x['mc'])
-        head = f"钱包池今天扫的货\n市值从 {_mc_str(lo['mc'])} 到 {_mc_str(hi['mc'])}"
-        items = [f"🟢 {p['tag']}  {_mc(p)}\n{p['n']} 笔买入" for p in picks[:4]]
+        # 极值必须取自**正文里真的列出来的那几个**（picks[:4]）。
+        # 原来取全量 picks 的 min/max —— 29 个标的只列 4 个时, head 说的
+        # 「市值从 7K$ 到 32.23M$」里那个 7K$ 的币根本不在正文里, 读者查不到。
+        shown = picks[:4]
+        hi = max(shown, key=lambda x: x['mc'])
+        lo = min(shown, key=lambda x: x['mc'])
+        head = f"链上追踪器今天扫的货\n市值从 {_mc_str(lo['mc'])} 到 {_mc_str(hi['mc'])}"
+        items = [f"🟢 {p['tag']}  {_mc(p)}\n{p['n']} 笔买入" for p in shown]
         tail = ("我盯的是市值分布\n"
                 "小市值弹性大, 大市值更稳\n"
-                "钱包池两个方向都在买\n\n"
+                "两头都有人在买\n\n"
                 "你偏好哪一头? 👇\n#Binance #MemeCoin")
 
     else:             # 5 观察型（只在笔数确实少时出现）
-        head = f"钱包池今天动得很轻\n最多的一笔也只有 {mx} 次买入"
+        _mxn = max((int(p.get('n') or 0) for p in picks), default=0)
+        head = f"链上追踪器今天动得很轻\n最多的一笔也只有 {_mxn} 次买入"
         items = [f"{p['tag']}  {p['n']} 笔  {p['amt']:.3g} {p['qsym']}" for p in picks[:4]]
-        tail = ("赢家地址轻仓试水的时候\n"
+        tail = ("轻仓试水的时候\n"
                 "我一般跟着看, 不跟单\n\n"
                 "你会小仓试吗? 👇\n#Binance #MemeCoin")
 
-    return vid, head, items, tail
+    return vid, head, items, _retag(tail, vid, 'meme')
+
+
+def _wallets(p):
+    """不同钱包数；老数据没有该字段时退回笔数(不会比以前更差)。"""
+    v = p.get('wallets')
+    return int(v) if v is not None else int(p.get('n') or 0)
+
+
+def smart_live_focus(picks):
+    """V2「最集中」会聚焦的那个币 —— 按钱包数, 并列时看笔数。
+
+    抽出来共用: 地址跟帖要把它排在最前面, 否则会出现「主帖点名第五名,
+    跟帖只放得下前四名」—— 被点名的那个反而拿不到地址。
+    """
+    if not picks:
+        return None
+    return max(picks, key=lambda x: (_wallets(x), int(x.get('n') or 0)))
+
+
+def smart_live_addrs(picks, limit_n=5, focus_first=False):
+    """链上追踪器扫货 → 合约地址清单(供 address_thread 用)。
+
+    focus_first=True 时把 V2 会聚焦的那个币排到最前 —— V2 按钱包数选,
+    那个币不一定在成交额前几名; 不提前的话主帖点了名、跟帖却放不下它的地址。
+    (address_thread 是从尾部落的, 所以顺序 = 重要性。)
+
+    地址用**原样**大小写：SOL 是 base58, 小写化后是另一个不存在的地址。
+    没有地址的标的直接跳过, 不编。
+    """
+    order = list(picks)
+    if focus_first:
+        focus = smart_live_focus(order)
+        if focus is not None:
+            order = [focus] + [p for p in order if p is not focus]
+    out, _seen = [], set()
+    for p in order[:limit_n * 2]:            # 多看几个: 同名被跳过时还能补位
+        ca = str(p.get('ca') or '').strip()
+        sym = str(p.get('sym') or p.get('ticker') or '').strip().upper()
+        if not ca or sym in _seen:
+            continue                          # 同名不同合约只留一个
+        _seen.add(sym)
+        out.append(f"{p.get('sym') or '?'} ({p.get('cn') or '?'}) {ca}")
+        if len(out) >= limit_n:
+            break
+    return out
+
+
+def addr_covered(main_text, picks, addrs):
+    """主帖里点了名、但地址跟帖没覆盖到的币 —— 正常应为空。
+
+    主帖点名却给不出地址, 读者搜 ticker 会买到同名的另一个币
+    (本地 pairs 表里 Heyi 33 个合约、Kimchi 233 个), 这正是加地址的理由。
+
+    用词边界匹配, 不做子串 —— 「MemeCoin」里含「Meme」不算提到了 Meme。
+    """
+    import re as _re
+    t = str(main_text or '')
+    covered = {str(a).split()[0].lstrip('$').upper() for a in addrs if str(a).strip()}
+    miss = []
+    for p in picks:
+        sym = str(p.get('sym') or p.get('ticker') or '').strip()
+        if not sym or sym.upper() in covered:
+            continue
+        pat = r'(?<![A-Za-z0-9])\$?%s(?![A-Za-z0-9])' % _re.escape(sym)
+        if _re.search(pat, t, re.I):
+            miss.append(sym)
+    return miss
 
 
 # ============================================================
@@ -406,7 +573,7 @@ def smart_money(fresh, done, cnt, gain):
 
     if vid == 1:      # 分组清单
         hook = max(fresh + done, key=cnt)
-        head = f"我盯的钱包池刚扫货\n{cnt(hook)} 个地址同时买入同一个币"
+        head = f"币安聪明钱信号刚扫货\n{cnt(hook)} 个地址同时买入同一个币"
         items = []
         if fresh:
             blk = ["🟢 刚触发(还没怎么涨)"]
@@ -418,7 +585,7 @@ def smart_money(fresh, done, cnt, gain):
             blk += [f"{r.get('ticker')}  {cnt(r)} 人买入  触发后 {gain(r):+.0f}%"
                     for r in done[:2]]
             items.append('\n'.join(blk))
-        tail = ("聪明钱 = 链上被持续跟踪的专业地址\n"
+        tail = ("聪明钱 = 币安官方信号统计的买入地址数\n"
                 "他们买什么, 往往先于市场热度\n\n"
                 "我不喊单, 只贴数据\n"
                 "你会跟着看哪个? 👇\n#Binance #Crypto")
@@ -457,7 +624,7 @@ def smart_money(fresh, done, cnt, gain):
         tail = ("我宁可空着, 也不硬凑一条\n\n"
                 "你会等信号, 还是自己找? 👇\n#Binance #Crypto")
 
-    return vid, head, items, tail
+    return vid, head, items, _retag(tail, vid, 'meme')
 
 
 # ============================================================
@@ -502,9 +669,14 @@ def filter_thread(criteria, column='filter'):
                   "你筛的时候会先看哪条? 👇")
 
     elif vid == 3:
-        rows = [d or t for t, d in criteria]
-        text = (f"这套口径一共 {n} 条, 主要是用来**剔除**的\n\n"
-                "过不了下面任意一条的, 我直接跳过:\n\n"
+        # 标题**不能丢**。原来写的是 `d or t` —— 说明代替了标题，读者看到的是
+        # 「过不了任意一条的，我直接跳过：有人真金白银进场」：本意是入选条件，
+        # 在「我跳过」的语境下意思正好反了。
+        # 但「标题+说明」4 条实测 281/280 差 1 字，所以 head 同步砍短
+        # （去掉「下面」和 `**` —— X 上 ** 本来也不渲染成粗体）。砍完 271/280。
+        rows = [f"{t}\n{d}" if d else t for t, d in criteria]
+        text = (f"这套口径一共 {n} 条, 主要是用来剔除的\n\n"
+                "过不了任意一条的, 我直接跳过:\n\n"
                 + "\n\n".join(rows)
                 + "\n\n留下来的才有资格进榜\n\n"
                   "你觉得该不该再严一点? 👇")
