@@ -109,9 +109,23 @@ def audit(text, limit=None, platform=None):
     # --- 三条最影响观感的检查(2026-10-18 加) ---
     if not any(k in text for k in ('我', '咱', '盯的', '扒了', '实测')):
         warn.append('全帖无第一人称(规则4)')
-    # 排除免责声明段 —— 它不是正文结尾
-    _last_block = [b for b in text.split('\n\n')
-                   if b.strip() and '不构成投资建议' not in b]
+    # 排除「非正文结尾」的段 —— 免责声明和纯标签行都不算结尾。
+    # 标签（#xxx / $xxx）按惯例放最后，但它不是正文的收尾；
+    # 不排除的话，正文里明明有问句也会误报「结尾无开放循环」。
+    import re as _re3
+    _TAGONLY = _re3.compile(r'^[\s#＃$＄\w\u4e00-\u9fff]+$')
+
+    def _is_real_end(b):
+        b = b.strip()
+        if not b or '不构成投资建议' in b:
+            return False
+        # 整段只有标签/币种/空白 → 不是正文结尾
+        words = [w for w in b.split() if w]
+        if words and all(w.startswith(('#', '＃', '$', '＄')) for w in words):
+            return False
+        return True
+
+    _last_block = [b for b in text.split('\n\n') if _is_real_end(b)]
     if _last_block and ('？' not in _last_block[-1] and '?' not in _last_block[-1]):
         warn.append('结尾无开放循环/问句(规则5)')
     _first = text.split('\n')[0].strip()
