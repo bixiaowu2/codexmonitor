@@ -47,9 +47,15 @@ def _style(ax):
     ax.grid(axis='x', color=GRID, linewidth=0.6)
 
 
-def _save(fig, name):
+# 账号名打码（2026-10-24 风格令规范 5）。默认值 = 老行为，广场线不受影响。
+DEFAULT_WATERMARK = '@bidafa1801919'
+# 只留首字符 —— 保留「这是个账号」的观感，但尾巴数字不漏（留 a1919 等于没打码）。
+MASKED_WATERMARK = '@b***'
+
+
+def _save(fig, name, watermark=None):
     CHARTS.mkdir(parents=True, exist_ok=True)
-    fig.text(0.995, 0.005, '@bidafa1801919', ha='right', va='bottom',
+    fig.text(0.995, 0.005, watermark or DEFAULT_WATERMARK, ha='right', va='bottom',
              color=MUTED, fontsize=9, alpha=0.85)
     path = CHARTS / name
     fig.savefig(path, dpi=150, facecolor=BG, bbox_inches='tight')
@@ -57,7 +63,7 @@ def _save(fig, name):
     return path
 
 
-def chart_scan():
+def chart_scan(name='scan.png', watermark=None):
     """观察池 TOP3: 集中度条形图(原始 vs 标注控盘)。"""
     try:
         m = json.loads(Path('/var/lib/demon-radar/matches.json').read_text())
@@ -92,7 +98,7 @@ def chart_scan():
 
     fig.text(0.01, 0.01, '三道筛：已上合约 · 未上现货 · 大户控盘≥60%',
              color=MUTED, fontsize=9.5)
-    return _save(fig, 'scan.png')
+    return _save(fig, name, watermark)
 
 
 def chart_meme():
@@ -258,7 +264,7 @@ def chart_smart_money(picks=None, top=8):
     return _save(fig, 'smart_money.png')
 
 
-def chart_review():
+def chart_review(name='review.png', watermark=None):
     """复盘: S级持仓 vs 集中度双指标。"""
     try:
         b = json.loads(Path('/var/lib/demon-radar/baseline.json').read_text())
@@ -304,7 +310,7 @@ def chart_review():
               facecolor=BG, edgecolor=GRID, labelcolor=FG, loc='lower right')
     fig.text(0.01, 0.01, '持仓上升 = 资金在布局　持仓下降 = 资金在撤退',
              color=MUTED, fontsize=9.5)
-    return _save(fig, 'review.png')
+    return _save(fig, name, watermark)
 
 
 def chart_signal(symbol, futures_sym):

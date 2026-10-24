@@ -175,6 +175,24 @@ def tg_send_photo(path, caption="", chat=None):
         return False
 
 
+# ---- 风格令辅助（2026-10-24 02:06）----------------------------------------
+_style_seen = []          # 本批用过的体式号，draft_today() 负责清空
+
+
+def _snap_of(path):
+    """数据快照口径 —— 取数据文件自己的时间戳，不取「现在」。
+
+    规范 3 要求「注明快照口径」，指的是数字是什么时候的数，
+    不是帖子什么时候写的 —— 所以取 mtime 而不是 time.time()。
+    """
+    import datetime as _dt
+    try:
+        _m = Path(path).stat().st_mtime
+    except Exception:
+        return '快照时间未知'
+    return '快照 ' + _dt.datetime.fromtimestamp(_m, _dt.timezone.utc).strftime('%m-%d %H:%M UTC')
+
+
 def compose_scan_alpha():
     """筛选类(早间栏目)。风格见 post_style: 短行 + 具体数字 + 结尾开放循环。"""
     import sys as _s
@@ -182,7 +200,8 @@ def compose_scan_alpha():
     import post_style as ps
     try:
         import x_chart
-        x_chart.chart_scan()
+        # 风格令规范 5：X 草稿线用打码水印 + 独立文件名（广场线仍走默认）
+        x_chart.chart_scan('scan_x.png', x_chart.MASKED_WATERMARK)
     except Exception:
         pass
     try:
@@ -199,18 +218,24 @@ def compose_scan_alpha():
            'conc': x['cleaned_top10'] * 100,
            'oi': x['oi_notional'] / 1e6} for x in picks]
     _spread = ((_p[0]['conc'] - _p[-1]['conc']) / 100) if len(_p) > 1 else 0.0
-    _vid = _pv.pick('alpha_pool', n=len(_p), spread=_spread)
-    head, items, tail = _pv.alpha_pool(_vid, _p)
-    print(f"  [变体] 妖币观察池 -> V{_vid} (n={len(_p)}, spread={_spread:.2f})")
-    main = ps.compose(head, items, tail)
+    # 主帖走风格令的体式池（不再用 post_variants 的固定骨架）
+    _xs = _style_mod()
+    _snap = _snap_of('/var/lib/demon-radar/matches.json')
+    _content = _xs.content_pool(_p, _snap)
+    _svid = _xs.pick('alpha_pool', sorted(_xs.STYLES))
+    main, _smeta = _xs.render(_svid, _content)
+    print(f"  [体式] 妖币观察池 -> {_smeta['style_name']} "
+          f"(xlen={_smeta['xlen']}, n={len(_p)}, spread={_spread:.2f})")
+    _style_seen.append(_svid)
     _tvid, thread = _pv.filter_thread(
         [('已上合约', '有真实资金在博弈'),
          ('未上现货', '现货上市前是布局窗口'),
          ('大户控盘≥60%', '主力已经拿到筹码')],
         column='alpha_filter_thread')
     print(f"  [变体] 妖币观察池跟帖 -> T{_tvid}")
-    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan.png",
-            "label": "妖币观察池", "vid": _vid, "thread_vid": _tvid}
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/scan_x.png",
+            "label": "妖币观察池", "vid": _svid, "thread_vid": _tvid,
+            "style": _smeta['style_name'], "xlen": _smeta['xlen']}
 
 
 def compose_review():
@@ -220,7 +245,7 @@ def compose_review():
     import post_style as ps
     try:
         import x_chart
-        x_chart.chart_review()
+        x_chart.chart_review('review_x.png', x_chart.MASKED_WATERMARK)
     except Exception:
         pass
     try:
@@ -234,13 +259,19 @@ def compose_review():
     downs = [(s, c, b0, c0) for s, c, b0, c0, _a in _dn5]
     # 变体池：按当天形状（有进有出/单边/平稳）选结构，并排除上次用过的
     import post_variants as _pv
-    _vid, head, items, tail = _pv.alpha_review(ups, downs)
-    print(f"  [变体] 每日复盘 -> V{_vid} (加仓{len(ups)} 撤退{len(downs)})")
-    main = ps.compose(head, items, tail)
+    _xs = _style_mod()
+    _snap = _snap_of('/var/lib/demon-radar/baseline.json')
+    _content = _xs.content_review(ups, downs, _snap)
+    _svid = _xs.pick('alpha_review', sorted(_xs.STYLES))
+    main, _smeta = _xs.render(_svid, _content)
+    print(f"  [体式] 每日复盘 -> {_smeta['style_name']} "
+          f"(xlen={_smeta['xlen']}, 加仓{len(ups)} 撤退{len(downs)})")
+    _style_seen.append(_svid)
     _tvid, thread = _pv.review_thread(ups, downs)
     print(f"  [变体] 每日复盘跟帖 -> T{_tvid}")
-    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review.png",
-            "label": "每日复盘", "vid": _vid, "thread_vid": _tvid}
+    return {"main": main, "thread": [thread], "chart": "/var/lib/x-publisher/charts/review_x.png",
+            "label": "每日复盘", "vid": _svid, "thread_vid": _tvid,
+            "style": _smeta['style_name'], "xlen": _smeta['xlen']}
 
 
 def _xlen(t):
@@ -282,6 +313,14 @@ def compose_smart_live_x():
             'addresses': addrs}
 
 
+# 风格令（2026-10-24 02:06，用户亲批）的落地模块 —— 只管主帖体式，不动跟帖。
+def _style_mod():
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import x_draft_style
+    return x_draft_style
+
+
 DRAFT_LOG = Path('/var/lib/x-publisher/drafts.jsonl')
 
 
@@ -301,6 +340,12 @@ def draft_today():
     「聪明钱扫货」已移出 —— 它的内容是 SOL/BSC 小币(钱包池), 属 meme 内容,
     现由 meme_publish 的草稿包发出。
     """
+    # 批次边界：规范 4「同批 2 条不得同体式」靠 _style_seen 实现
+    _style_seen.clear()
+    try:
+        _style_mod().begin_batch()
+    except Exception:
+        pass
     drafts = []
     for fn in (compose_scan_alpha, compose_review):
         try:
@@ -309,6 +354,11 @@ def draft_today():
             text = None
         if text:
             drafts.append(text)
+    # 规范 4 后半句：连续两批不得重复同一开头句式 —— 记下本批用的体式
+    try:
+        _style_mod().note_styles(_style_seen)
+    except Exception:
+        pass
     return drafts
 
 
@@ -395,8 +445,13 @@ def main():
             # 复盘类统一由内容 bot 发(群里只有一个发件人); 其余草稿走 Alpha bot
             is_review = '复盘' in d['label']
             _tag = '[复盘]' if is_review else '[Alpha]'
-            parts = [f"📝 {_tag} {d['label']} @ {ts}",
-                     "【主帖】\n" + d['main']]
+            _hint = ''
+            try:
+                _hint = ' · ' + _style_mod().PUBLISH_HINT
+            except Exception:
+                pass
+            parts = [f"📝 {_tag} {d['label']} @ {ts}{_hint}",
+                     f"【主帖·{d.get('style', '?')}·{d.get('xlen', '?')}字】\n" + d['main']]
             for i, t in enumerate(d.get('thread') or [], 1):
                 parts.append(f"【跟帖{i}】\n" + t)
             text = "\n\n".join(parts)

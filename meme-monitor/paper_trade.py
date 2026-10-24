@@ -54,6 +54,15 @@ def init(db):
         db.execute("ALTER TABLE positions ADD COLUMN tier TEXT DEFAULT 'S'")
     if 'closed_at' not in _cols:
         db.execute('ALTER TABLE positions ADD COLUMN closed_at REAL')
+    # 2026-10-24: 入场特征落库 —— 用来回答「哪些特征能挑出摸过 2x 的那 10%」。
+    # 依据: 213 笔已平仓只有 9.9% 摸过 2x、中位 peak/entry=1.00x, 但入场特征从没存过,
+    # 导致「是不是买在高点」这个问题一直无法用数据回答。
+    _feat = (('score','REAL'),('liquidity_usd','REAL'),('market_cap','REAL'),
+             ('smart','INT'),('wallet_hits','INT'),('cleaned_top10','REAL'),
+             ('dev_pct','REAL'),('top10_official','REAL'))
+    for _c,_t in _feat:
+        if _c not in {r[1] for r in db.execute('PRAGMA table_info(positions)')}:
+            db.execute(f'ALTER TABLE positions ADD COLUMN {_c} {_t}')
     db.execute('''CREATE TABLE IF NOT EXISTS fills(
         key TEXT, at REAL, kind TEXT, price REAL, mult REAL, pnl REAL)''')
     db.execute('CREATE INDEX IF NOT EXISTS fills_by_key ON fills(key, at)')
@@ -65,6 +74,9 @@ def init(db):
         realized REAL, last_price REAL, last_at REAL, note TEXT,
         tier TEXT, closed_at REAL,
         archived_at REAL)''')
+    for _c,_t in _feat:
+        if _c not in {r[1] for r in db.execute('PRAGMA table_info(positions_history)')}:
+            db.execute(f'ALTER TABLE positions_history ADD COLUMN {_c} {_t}')
     # 老数据回填 closed_at —— 平仓时刻就是最后一笔成交的时刻。
     # 实测 162 笔已平仓全部有 fills 记录(0 缺失), 这次回填是完整的;
     # 万一有个别缺失, 留 NULL 会被当成「已过冷却」= 可重开, 不会把币永久锁死。
@@ -143,14 +155,20 @@ def run():
             # 老行不删只挪: 统计仍能算全量(fills 里也还留着它的成交)。
             # 显式列名, 不靠 `SELECT *` 的列序 —— 以后 positions 加列也不会错位。
             _hc = ('key,symbol,chain,address,entry,opened,peak,stop,tp1_done,tp2_done,'
-                   'closed,realized,last_price,last_at,note,tier,closed_at')
+                   'closed,realized,last_price,last_at,note,tier,closed_at,'
+                   'score,liquidity_usd,market_cap,smart,wallet_hits,cleaned_top10,'
+                   'dev_pct,top10_official')
             db.execute(f'INSERT INTO positions_history({_hc},archived_at) '
                        f'SELECT {_hc},? FROM positions WHERE key=?', (now, key))
             db.execute('DELETE FROM positions WHERE key=?', (key,))
-        db.execute('INSERT INTO positions(key,symbol,chain,address,entry,opened,peak,stop,last_price,last_at,tier)'
-                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        db.execute('INSERT INTO positions(key,symbol,chain,address,entry,opened,peak,stop,last_price,last_at,tier,'
+                   'score,liquidity_usd,market_cap,smart,wallet_hits,cleaned_top10,dev_pct,top10_official)'
+                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                    (key, x.get('symbol'), x.get('chain'), x.get('address'),
-                    entry, now, entry, entry * (1 - STOP_PCT), entry, now, x.get('tier')))
+                    entry, now, entry, entry * (1 - STOP_PCT), entry, now, x.get('tier'),
+                    x.get('score'), x.get('liquidity_usd'), x.get('market_cap'),
+                    x.get('smart'), x.get('wallet_hits'), x.get('cleaned_top10'),
+                    x.get('dev_pct'), x.get('top10_official')))
         opened += 1
 
     # ---- B. 检查未平仓 ----
@@ -188,7 +206,11 @@ def run():
             close_part('tp2', 1 / 3, 'tp2', entry * TP2)
             db.execute('UPDATE positions SET tp2_done=1 WHERE key=?', (p['key'],))
         # 剩余仓位: 峰值回撤 30%
-        if price <= peak * (1 - TRAIL_PCT):
+        # 2026-10-24 修: 加 peak>entry 守卫, 与 fast-stop 的同一规则对齐。
+        # 原来 peak 初始化为 entry, 于是「从没涨过」的币会在 0.70x 触发 trail,
+        # 抢在 -50% 硬止损之前平仓 —— 既与 docstring「止损 -50%」不符,
+        # 又把还没启动的票提前砍掉(213 笔里 39 笔栽在这条上, 是 10x 彩票的杀手)。
+        if peak > entry and price <= peak * (1 - TRAIL_PCT):
             left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
             if left > 0:
                 close_part('trail', left, 'trail')
