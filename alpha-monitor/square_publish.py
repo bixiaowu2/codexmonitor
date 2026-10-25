@@ -10,7 +10,7 @@
   square_publish.py --test     发测试帖
 """
 from __future__ import annotations
-import json, os, subprocess, sys, time, argparse
+import datetime, json, os, subprocess, sys, time, argparse
 from pathlib import Path
 
 DATA = Path('/var/lib/demon-radar')
@@ -76,6 +76,30 @@ def _relay_fail(kind, out):
         print('  已推失败告警')
     except Exception as e:
         print(f'  失败告警也发不出去: {str(e)[:80]}')
+
+
+# 广场发帖台账 —— 两路（服务器脚本 + 总指挥保管箱通道）共用，发前先读、发后即记。
+# 2026-10-25 总指挥裁定：square-scan 每天发的观察池图帖必须登记，
+# 否则另一路看不到，看起来像撞车。
+LEDGER = Path('/var/lib/content-queue/video-requests/chat/square-log.md')
+_CST = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def _log_ledger(kind, out, note=''):
+    """发成功后登记台账。失败不记 —— 记了却没发出去比不记更糟。"""
+    import re as _re
+    m = _re.search(r'id[=:\s]+([0-9]{10,})', out or '', _re.I)
+    pid = m.group(1) if m else '?'
+    now = datetime.datetime.now(_CST).strftime('%Y-%m-%d %H:%M')
+    line = (f'{now} CST | 服务器脚本(square_publish --{kind}) | {note} | '
+            f'id={pid} | 活动贴：否\n')
+    try:
+        with LEDGER.open('a', encoding='utf-8') as f:
+            f.write(line)
+        print(f'  已登记台账: id={pid}')
+    except Exception as e:
+        # 登记失败不能影响发帖本身，但必须吵 —— 不然后面查重会漏
+        print(f'  ⚠️ 台账登记失败({type(e).__name__}) —— 请手动补记 id={pid}')
 
 
 def post_text(text, title=None):
@@ -764,6 +788,10 @@ def main():
     # 别让 systemd 报 success —— 发失败就是失败
     if 'Success' not in (out or ''):
         sys.exit(1)
+    # 发成功才登记台账（总指挥 2026-10-25 裁定）
+    _kind = 'scan' if args.scan else 'review'
+    _label = '妖币观察池图帖' if args.scan else '每日复盘图帖'
+    _log_ledger(_kind, out, _label)
 
 
 if __name__ == '__main__':

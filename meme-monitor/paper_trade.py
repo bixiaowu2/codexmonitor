@@ -66,6 +66,13 @@ def init(db):
     db.execute('''CREATE TABLE IF NOT EXISTS fills(
         key TEXT, at REAL, kind TEXT, price REAL, mult REAL, pnl REAL)''')
     db.execute('CREATE INDEX IF NOT EXISTS fills_by_key ON fills(key, at)')
+    # 2026-10-24: 记价格路径 —— 用来回答「-30% 止损是不是比 -50% 好」这类问题。
+    # 原来只有 4 个粗检查点(forward_tracks)且大量 missing, 没法还原「先到 -30% 还是先到 +50%」,
+    # 于是止损宽度只能拍脑袋。这里每次轮询给每个持仓记一条, 粒度与实际出场判定一致(10 分钟)。
+    db.execute('''CREATE TABLE IF NOT EXISTS price_marks(
+        key TEXT, at REAL, price REAL, mult REAL)''')
+    db.execute('CREATE INDEX IF NOT EXISTS marks_by_key ON price_marks(key, at)')
+    db.execute('DELETE FROM price_marks WHERE at < ?', (time.time() - 45 * 86400,))
     # 冷却到期重开时, 老行整行挪到这里 —— 不删历史, 统计仍能算全量。
     db.execute('''CREATE TABLE IF NOT EXISTS positions_history(
         key TEXT, symbol TEXT, chain TEXT, address TEXT,
@@ -174,13 +181,34 @@ def run():
     # ---- B. 检查未平仓 ----
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
         c = {'chain': p['chain'], 'address': p['address']}
+        entry = p['entry'] or 0
         price = price_of(c, matches)
         if not price:
+            # 2026-10-25 修: 取不到价时不能直接 continue —— 那会把下面的「到期结算」一起跳过。
+            # 而取不到价的恰恰是**丢了交易对**的币(rug/退市), 于是它们永远挂着、永远不进统计。
+            # 实测: ELON 已 7.49 天、Nuctitan 6.82 天仍 open, 两者 DexScreener 都返回空列表。
+            # 后果是已平仓样本被系统性截断(死币全被剔除) → 均值/胜率偏乐观。
+            # 改为: 到期仍按**最后观测价**结算并明确标注, 不臆造价格(同 forward.py 原则)。
+            if entry > 0 and now - p['opened'] >= MAX_HOLD_DAYS * 86400:
+                last = p['last_price'] or entry
+                left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
+                if left > 0 and last:
+                    m = last / entry
+                    db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?)',
+                               (p['key'], now, 'timeout_nopx', last, m, left * (m - 1)))
+                    db.execute('UPDATE positions SET realized=realized+? WHERE key=?',
+                               (left * (m - 1), p['key']))
+                db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
+                           (now, '持有到期(无行情)', p['key']))
+                closed += 1
             continue
-        entry, peak = p['entry'], max(p['peak'], price)
+        if entry <= 0:
+            continue
+        peak = max(p['peak'], price)
         db.execute('UPDATE positions SET peak=?, last_price=?, last_at=? WHERE key=?',
                    (peak, price, now, p['key']))
         mult = price / entry
+        db.execute('INSERT INTO price_marks VALUES(?,?,?,?)', (p['key'], now, price, mult))
 
         def close_part(kind, frac, reason, at_price=None):
             # at_price: 指定成交价。止盈用触发价(entry*TP1), 止损/移动止盈用当轮观测价。

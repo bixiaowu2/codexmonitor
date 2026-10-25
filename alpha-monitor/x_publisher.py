@@ -321,6 +321,16 @@ def _style_mod():
     return x_draft_style
 
 
+# 七天版式表（2026-10-25 总指挥派单，用户已批准）的落地模块。
+# 该表**取代** 10-24 风格改进令里「随机轮换五体式」的笼统口径：
+# 原创帖按 CST 星期对版式出稿，每天 1 条。原文见 chat/to-claude.md 2026-10-25 两条。
+def _weekly_mod():
+    import sys as _s
+    _s.path.insert(0, '/opt/alpha-radar')
+    import x_weekly
+    return x_weekly
+
+
 DRAFT_LOG = Path('/var/lib/x-publisher/drafts.jsonl')
 
 
@@ -335,11 +345,73 @@ def _draft_log(rec):
 
 
 def draft_today():
-    """生成今日草稿包(妖币观察池 + 每日复盘)。
+    """生成今日草稿包 —— 按七天版式表出 1 条原创帖。
 
-    「聪明钱扫货」已移出 —— 它的内容是 SOL/BSC 小币(钱包池), 属 meme 内容,
-    现由 meme_publish 的草稿包发出。
+    2026-10-25 总指挥派单（用户已批准）：自 2026-10-26 起，原创帖按 CST 星期对版式，
+    每天 1 条，配图按版式布局出深色数据卡（1200×628）。此表**取代** 10-24 风格令里
+    「随机轮换五体式」的笼统口径。
+
+    稿头（`【主帖·…】` 行之前）由 main() 用 x_weekly.header() 加上：
+    当日版式 + 建议入卡的 3 个关键数字（细则 5 要求）。
+
+    原「妖币观察池 + 每日复盘」两列**未删除**，可用 `--draft-legacy` 单独出，
+    便于随时回滚（属停发/改口径类动作，已按硬规矩在回执中报总指挥确认）。
     """
+    wk = _weekly_mod()
+    try:
+        if not wk.in_effect():
+            # 派单原文「自 2026-10-26（周一）起执行」—— 生效日前仍走旧两列草稿，
+            # 保证「首稿为 2026-10-26 周一榜单版」与原文逐字对上。
+            print(f"  [七天版式] 未到生效日 {wk.EFFECTIVE_FROM}（今日 {wk.plan()['date']}），"
+                  f"仍按 10-24 风格令出两列草稿")
+            return draft_today_legacy()
+        if wk.already_ran_today():
+            print(f"  今日({wk.plan()['date']})已出过稿，按细则 1「每天 1 条」跳过")
+            return []
+        draft, err = wk.build()
+    except Exception as e:
+        draft, err = None, f'版式模块异常: {type(e).__name__}: {str(e)[:120]}'
+    if err or not draft:
+        # 细则 1：无新鲜数据时换常青版式，或注明「今日无稿」及原因 —— 绝不编数字。
+        print(f"  [七天版式] 今日无稿：{err}")
+        return []
+    wk.note_ran()
+    chart = None
+    try:
+        chart = _render_weekly_card(draft)
+    except Exception as e:
+        print(f"  [七天版式] 配图失败(不影响出稿): {type(e).__name__}: {str(e)[:100]}")
+    return [{'main': draft['main'], 'thread': [], 'chart': chart,
+             'label': f"{draft['weekday']}{draft['format']}",
+             'vid': None, 'thread_vid': None,
+             'style': draft['format'], 'xlen': draft['xlen'],
+             'header': wk.header(draft)}]
+
+
+def _render_weekly_card(draft):
+    """按版式渲染配图（深色数据卡 1200×628），写到 X 线独立文件名。"""
+    import x_card as _xc
+    kind = draft['card'][0]
+    out = f"/var/lib/x-publisher/charts/weekly_{kind}.png"
+    if kind == 'rank':
+        return str(_xc.card_rank(out, draft['card'][1]))
+    if kind == 'verify':
+        return str(_xc.card_verify(out, draft['card'][1], draft['card'][2]))
+    if kind == 'report':
+        return str(_xc.card_report(out, draft['card'][1], draft['card'][2]))
+    if kind == 'steps':
+        return str(_xc.card_steps(out, draft['card'][1]))
+    if kind == 'original':
+        return str(_xc.card_original(out, draft['card'][1], draft['card'][2], draft['card'][3]))
+    if kind == 'compare':
+        return str(_xc.card_compare(out, draft['card'][1]))
+    if kind == 'ask':
+        return str(_xc.card_ask(out, draft['card'][1], draft['card'][2]))
+    return None
+
+
+def draft_today_legacy():
+    """旧两列草稿包（妖币观察池 + 每日复盘）—— 保留以便回滚，`--draft-legacy` 调。"""
     # 批次边界：规范 4「同批 2 条不得同体式」靠 _style_seen 实现
     _style_seen.clear()
     try:
@@ -390,6 +462,8 @@ def main():
     ap.add_argument('--review', action='store_true')
     ap.add_argument('--run', action='store_true')
     ap.add_argument('--draft', action='store_true', help='生成今日草稿推文, 推送Telegram(人工发X)')
+    ap.add_argument('--draft-legacy', action='store_true',
+                    help='旧两列草稿包(妖币观察池+每日复盘), 保留以便回滚')
     args = ap.parse_args()
 
     if args.test:
@@ -423,8 +497,8 @@ def main():
         process_queue()
         return
 
-    if args.draft:
-        drafts = draft_today()
+    if args.draft or args.draft_legacy:
+        drafts = draft_today_legacy() if args.draft_legacy else draft_today()
         if not drafts:
             print("今日无可发内容")
             return
@@ -450,7 +524,8 @@ def main():
                 _hint = ' · ' + _style_mod().PUBLISH_HINT
             except Exception:
                 pass
-            parts = [f"📝 {_tag} {d['label']} @ {ts}{_hint}",
+            _hdr = f"\n{d['header']}" if d.get('header') else ''
+            parts = [f"📝 {_tag} {d['label']} @ {ts}{_hint}{_hdr}",
                      f"【主帖·{d.get('style', '?')}·{d.get('xlen', '?')}字】\n" + d['main']]
             for i, t in enumerate(d.get('thread') or [], 1):
                 parts.append(f"【跟帖{i}】\n" + t)

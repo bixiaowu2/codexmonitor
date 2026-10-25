@@ -202,6 +202,16 @@ def main():
     sa.sort(key=lambda c: (-(c['_conc'] if c['_conc'] is not None else -1), -(c['_score'] or 0)))
     s_tier = [{'symbol': c.get('symbol'), 'name': c.get('name'), 'conc': c['_conc'], 'tier': 'S'} for c in sa if c['_tier'] == 'S']
     MATCHES.write_text(json.dumps(s_tier, ensure_ascii=False, indent=2))
+    # 2026-10-25 补度量: 每天归档一份 S 级名单。stock_matches.json 每天被覆盖、只留一份 .prev.json,
+    # 于是「S 级是否比非 S 级好」只能用**今天的名单**去回溯评估 → 前视污染。
+    # 追加归档(只增不改), 攒够若干天后可做时间正确的对比。失败不影响扫描。
+    try:
+        with (DATA / 'stock_matches_history.jsonl').open('a', encoding='utf-8') as _af:
+            _af.write(json.dumps({'at': time.time(),
+                                  'symbols': [x['symbol'] for x in s_tier]},
+                                 ensure_ascii=False) + '\n')
+    except Exception:
+        pass
 
     ts = time.strftime('%m-%d %H:%M UTC', time.gmtime())
     prev = {}

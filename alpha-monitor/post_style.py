@@ -154,4 +154,14 @@ def audit(text, limit=None, platform=None):
         _cnt = [int(x) for x in _re2.findall(r'(\d+)\s*(?:人|笔|个地址)', text)]
         if _cnt and max(_cnt) >= 10:
             warn.append(f'说「安静/平稳」但帖内有 {max(_cnt)} 人/笔 —— 自相矛盾')
+    # --- 钩子块必须有具体数字(2026-10-25 加) ---
+    # 依据: 2026-10-25 三条异常爆款的首行钩子全带具体数字
+    #   (「一场直播, 300万美元没了」/「睡了9小时, Grok 把170美金干到2154美金」);
+    # 而全站 42 个变体里曾有 11 个钩子一个数字都没有 —— 规则1 写了「带具体数字或反差」,
+    # 却一直没有机械校验。唯一性/悬念/观察型按设计不含数字, 用词表豁免。
+    _HOOK_NUM_OK = ('只挑出', '只有这一个', '有个', '平稳', '没异动', '安静',
+                    '没信号', '很轻', '不动', '没有大资金', '基本没变')
+    _hook = text.split('\n\n')[0]
+    if not any(c.isdigit() for c in _hook) and not any(k in _hook for k in _HOOK_NUM_OK):
+        warn.append('钩子(首段)无任何数字 —— 首行钩子要带具体数字(规则1)')
     return warn

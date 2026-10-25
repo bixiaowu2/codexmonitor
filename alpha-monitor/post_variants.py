@@ -164,7 +164,7 @@ def alpha_pool(vid, picks, n_smart=None, threads=None):
     elif vid == 6:    # 递进型 —— 按确定性排序，并说明排序逻辑
         rows = [f"{i}. {s}  控盘 {c:.0f}%\n持仓 {o:.1f}M USDT"
                 for i, (s, c, o) in enumerate(syms, 1)]
-        head = "这三个不是一样的\n我按把握大小排了序"
+        head = f"这 {n} 个不是一样的\n我按把握大小排了序"
         items = rows
         tail = ("排在前面的, 控盘更集中\n"
                 "把握大不等于会涨, 只是筹码更稳\n\n"
@@ -173,7 +173,7 @@ def alpha_pool(vid, picks, n_smart=None, threads=None):
 
     else:             # 7 失效条件型 —— 诚实给「什么情况下逻辑不成立」
         items = [f"{s}  控盘 {c:.0f}%" for s, c, _ in syms]
-        head = f"这三个同时过了筛\n但逻辑会失效"
+        head = f"这 {n} 个同时过了筛\n但逻辑会失效"
         tail = ("两种情况我会把它们划掉:\n"
                 "① 现货一上, 布局窗口就没了\n"
                 "② 大户控盘掉到 60% 以下\n\n"
@@ -247,7 +247,8 @@ def alpha_review(ups, downs):
     elif vid == 6:    # 自述型 —— 从「一个具体时刻 + 一个对不上的数」讲起, 不从清单讲起
         if nu and nd:
             _a, _b = ups[0], downs[0]
-            head = "今天筛池子的时候\n有两个数对不上"
+            head = (f"今天筛池子的时候\n有两个数对不上: "
+                    f"{_a[1]:+.0f}% 和 {_b[1]:+.0f}%")
             items = [f"{_a[0]} 一天进 {_a[1]:+.0f}%",
                      f"{_b[0]} 一天撤 {_b[1]:+.0f}%",
                      "同一个池子, 方向相反"]
@@ -333,9 +334,9 @@ def meme_pool(picks):
 
     if vid == 1:      # 清单型
         if n_smart:
-            head = f"我盯的 meme 池里\n聪明钱在买, 筹码还散着{mc_s}"
+            head = f"我盯的 meme 池里\n{n} 个里, 聪明钱在买、筹码还散着{mc_s}"
         else:
-            head = f"我盯的 meme 池里\n只有这几个集中度低{mc_s}"
+            head = f"我盯的 meme 池里\n{n} 个集中度够低{mc_s}"
         items = [_m_line(p, ["🥇", "🥈", "🥉"][i]) for i, p in enumerate(picks)]
         tail = "我只列数据, 不喊单\n\n你先看哪个? 👇\n#MemeCoin #Crypto"
 
@@ -383,7 +384,7 @@ def meme_pool(picks):
                 "你会空仓等吗? 👇\n#MemeCoin #Crypto")
 
     elif vid == 6:    # 递进型 —— 按风险排序
-        head = "这几个我按风险排了序\n最稳的放前面"
+        head = f"这 {n} 个我按风险排了序\n最稳的放前面"
         items = [_m_line(p) for p in picks]
         tail = ("集中度越低越稳\n"
                 "但也越没人拉盘\n\n"
@@ -391,7 +392,7 @@ def meme_pool(picks):
                 "你会怎么选? 👇\n#MemeCoin #Crypto")
 
     else:             # 7 失效条件型
-        head = "这几个现在数据还行\n但有两种情况我会划掉"
+        head = f"这 {n} 个现在数据还行\n但有两种情况我会划掉"
         items = [_m_row(p) for p in picks]
         tail = ("① 集中度突然升高 —— 有人在收筹\n"
                 "② 聪明钱开始卖 —— 逻辑就没了\n\n"
@@ -609,7 +610,7 @@ def smart_money(fresh, done, cnt, gain):
                 "你觉得这种回看有意义吗? 👇\n#Binance #Crypto")
 
     elif vid == 4:    # 对比
-        head = "两组信号摆一起\n一组刚出 · 一组已兑现"
+        head = f"两组信号摆一起\n刚触发 {nf} 条 · 已兑现 {nd} 条"
         items = [f"🟢 刚触发 {nf} 条\n最高 {max([gain(r) for r in fresh] or [0]):+.0f}%",
                  f"🔥 已兑现 {nd} 条\n最高 {max([gain(r) for r in done] or [0]):+.0f}%"]
         tail = ("我两组都看\n"
