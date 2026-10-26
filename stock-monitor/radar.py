@@ -73,6 +73,11 @@ def cycle(cfg, store, collector=None, universe=None):
     rows.sort(key=lambda r: (-r['score_meta']['score'], r['symbol']))
     rows = [r for group in grouped_rows(rows).values() for r in group[:cfg.max_candidates]]
     now = time.time(); previous = store.state('scores', {}) or {}; events = []
+    # 2026-10-25 补度量: 统计「分数跳升够格、但因 fresh=False 没发事件」的行, 按市场分开。
+    # 起因: forward_tracks 里美股 307 行 / A股 45 行, 而股票池是 A股 90 / 美股 20 ——
+    # 评估样本与对外产品严重不匹配。靠 events_by_market + suppressed 才能分清
+    # 「A股确实不跳分」与「A股跳了但被 fresh 吃掉」。只加计数, 不改任何判定逻辑。
+    suppressed = Counter()
     channels = [x for x, on in [('telegram', cfg.telegram_enabled), ('dingtalk', cfg.dingtalk_enabled)] if on]
     current = {}
     for row in rows:
@@ -83,6 +88,8 @@ def cycle(cfg, store, collector=None, universe=None):
             track_key=f'{VERSION}:event:{kind}:{key}:{int(now//1800)}'
             for ch in channels: store.enqueue(f'{track_key}:{ch}', {'channel': ch, 'text': text}, now)
             events.append({'kind': kind, 'symbol': key, 'score': s['score'], 'track_key': track_key, 'entry': row.get('price'), 'instrument_key': key, 'market': market_label(row), 'payload': {'score': s, 'theme': row.get('theme'), 'kind': kind, 'quote_at': row.get('quote_at'), 'risk': s.get('risk', []), 'features': ledger_features(row, s)}})
+        elif kind:
+            suppressed[market_label(row)] += 1
     store.put('scores', current)
     with store.db() as d:
         for row in rows:
@@ -114,5 +121,8 @@ def cycle(cfg, store, collector=None, universe=None):
                          '市场休市时保留上一根已收盘K线，仅作观察，不把旧价格当成当前买入信号。')
             for ch in channels: store.enqueue(f'{status_key}:{ch}', {'channel':ch, 'market':'status', 'text':status_text}, now)
     report = {'version': VERSION, 'as_of': now, 'forward': forward, 'markets': grouped_rows(rows), 'rows': rows, 'events': events, 'sources': statuses,
+              'events_by_market': dict(Counter(e['market'] for e in events)),
+              'suppressed': dict(suppressed),
+              'fresh_by_market': dict(Counter(market_label(r) for r in fresh_rows)),
               'data_quality':quality,'errors': [s for s in statuses if s['status'] != 'ok'], 'notice': '主题标签用于研究分类，不等于公司获得订单、政策支持或股价必涨；缺少新鲜行情时不推送即时信号。'}
     store.put('latest', report); store.cleanup(now); return report

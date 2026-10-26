@@ -140,7 +140,16 @@ def big_holder_concentration(symbol):
 
 
 def yf_concentration(symbol):
-    cache = AK_DIR / (symbol.replace('.','_') + '.json')
+    """美股/港股的「真实控制方持股」。
+
+    2026-10-25 改: 原用 insiders + institutions。但 A 股口径(big_holder_concentration)
+    **刻意剔除**基金/资管/保险等机构, 只数真实控股股东; 而 insiders+institutions 把机构算进去,
+    于是美股天然 85+、A 股封顶 70 —— 两套口径混排, 跨市场排序无意义,
+    且 S 级门槛(conc>=30)对美股几乎自动成立(机构持股>=30% 是常态)。
+    实测: BKSY 旧 87.3%(机构占 79.3)、仅内部人 8.0%; SATL 86.5→7.5; AEVA 85.0→17.5。
+    现改为**仅内部人**, 与 A 股语义对齐。旧口径另存 conc_all, 不丢信息, 便于对照。
+    """
+    cache = AK_DIR / (symbol.replace('.','_') + '.ins.json')   # 换文件名, 避免与旧口径缓存(7天TTL)混用
     now = time.time()
     if cache.exists() and now - cache.stat().st_mtime < 86400*7:
         try:
@@ -154,10 +163,11 @@ def yf_concentration(symbol):
             return None
         # yfinance 新版 major_holders 是单列表(index=标签, Value=值)
         d = {str(k): v for k, v in mh['Value'].items()}
-        conc = (float(d.get('insidersPercentHeld',0) or 0) + float(d.get('institutionsPercentHeld',0) or 0)) * 100
+        ins = float(d.get('insidersPercentHeld',0) or 0) * 100
+        all_ = ins + float(d.get('institutionsPercentHeld',0) or 0) * 100
         AK_DIR.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({'conc': conc, 'ts': now}))
-        return conc
+        cache.write_text(json.dumps({'conc': ins, 'conc_all': all_, 'ts': now}))
+        return ins
     except Exception:
         return None
 
@@ -227,7 +237,9 @@ def main():
     pf.write_text(json.dumps(s_tier, ensure_ascii=False))
 
     header = f'📈 股票 S级候选 @ {ts}'
-    cond = "条件: 大股东控盘≥40% 且 score≥30; A股=akshare十大流通股东(剔除HKSCC/基金), 港股美股=yfinance(内部人+机构); S级触发启动/回撤/止盈/技术面"
+    cond = ("条件: 真实大股东控盘≥30% 且 score≥50 (A级: 控盘≥20% 或 score≥45); "
+            "A股=akshare十大流通股东(剔除HKSCC/基金/资管/保险); 美股/港股=yfinance内部人持股; "
+            "S级触发启动/回撤/止盈/技术面")
     body_lines = [header, cond, '']
     MKTS = ['A股', '港股', '美股', '韩股']
     for mk in MKTS:

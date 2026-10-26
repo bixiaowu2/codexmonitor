@@ -35,6 +35,11 @@ def main():
             summary = {'version': report.get('version'), 'as_of': report.get('as_of'),
                        'rows': q.get('rows'), 'fresh': q.get('fresh_rows'), 'stale': q.get('stale_rows'),
                        'source_errors': q.get('source_errors'), 'events': len(report.get('events', [])),
+                       # 2026-10-25 补度量: 按市场拆开, 用来查「评估样本 83% 是美股、而池子 67% 是 A股」的成因。
+                       # suppressed = 分数跳升够格但因 fresh=False 没发事件的行。只加字段, 不改行为。
+                       'events_by_market': report.get('events_by_market'),
+                       'suppressed': report.get('suppressed'),
+                       'fresh_by_market': report.get('fresh_by_market'),
                        'errors': report.get('errors', [])}
             print(json.dumps(summary, ensure_ascii=False), flush=True)
         except Exception as e: print('stock_error:' + type(e).__name__, flush=True)
