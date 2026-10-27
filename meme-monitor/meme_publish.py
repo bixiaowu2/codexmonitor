@@ -200,6 +200,7 @@ def compose_scan():
     return {"main": main, "thread": [thread1] + _threads2,
             "chart": str(chart) if chart else None,
             "label": "Meme观察池", "addresses": addrs,
+            "vid": _vid, "thread_vid": _tvid,
             "symbols": [str(r.get('symbol') or '?') for r in picks]}
 
 
@@ -252,6 +253,7 @@ def compose_smart_live():
         print('扫货出图失败:', str(e)[:80])
     return {"main": main, "thread": [thread, thread2], "chart": str(chart) if chart else None,
             "label": "聪明钱扫货", "addresses": addrs,
+            "vid": _vid, "thread_vid": _tvid,
             "symbols": [str(x['sym']) for x in picks[:4]]}
 
 
@@ -312,10 +314,13 @@ def compose_smart_money():
     except Exception as e:
         print('买入榜出图失败:', str(e)[:80])
     return {"main": main, "thread": [thread, thread2], "chart": str(chart) if chart else None,
-            "label": "聪明钱买入榜", "addresses": addrs, "symbols": syms}
+            "label": "聪明钱买入榜", "addresses": addrs, "symbols": syms,
+            "vid": _vid, "thread_vid": _tvid}
 
 
 LAST_POST = DATA / 'last_post.json'
+# X 草稿台账 —— 与 x_publisher 共用一份, 好让「已发帖↔变体号」能对上。
+DRAFT_LOG = Path('/var/lib/x-publisher/drafts.jsonl')
 
 
 def _last_symbols():
@@ -330,6 +335,27 @@ def _save_symbols(syms):
         LAST_POST.write_text(json.dumps({'symbols': syms, 'ts': time.time()}, ensure_ascii=False))
     except Exception:
         pass
+
+
+def _draft_log(d):
+    """把推出去的 X 草稿落盘(与 x_publisher.drafts.jsonl 同一份台账)。
+
+    原来 meme 线只推 Telegram、不落盘 —— 于是「哪条帖用了哪一版变体」无从追溯
+    (post_variants._TAGS 只有 5 个标签对 7 个变体, 看帖文认不出)。补这条日志后,
+    已发帖的正文可与 main 比对还原变体号。写失败不能影响出稿。
+    """
+    try:
+        DRAFT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        rec = {'ts': time.time(),
+               'ts_human': time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime()),
+               'label': d.get('label'), 'vid': d.get('vid'),
+               'thread_vid': d.get('thread_vid'), 'chart': d.get('chart'),
+               'main': d.get('main'), 'thread': d.get('thread') or [],
+               'src': 'meme_publish'}
+        with DRAFT_LOG.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except Exception as e:
+        print(f'  [草稿日志] 写失败(不影响出稿): {type(e).__name__}')
 
 
 def format_draft(d):
@@ -448,10 +474,13 @@ def main():
             for _w in ps.audit(_t, platform='x'):
                 print(f'[风格告警·x · {d["label"]} 跟帖{_i}] {_w}')
         chart = Path(d['chart']) if d.get('chart') else None
+        _ok = False
         if chart and chart.exists() and tg_send_photo(chart, text):
-            print(f'X草稿: 已推 Telegram(带图 {chart.name} · {d["label"]})'); sent = True
+            print(f'X草稿: 已推 Telegram(带图 {chart.name} · {d["label"]})'); sent = True; _ok = True
         elif tg_draft(text):
-            print(f'X草稿: 已推 Telegram(纯文字 · {d["label"]})'); sent = True
+            print(f'X草稿: 已推 Telegram(纯文字 · {d["label"]})'); sent = True; _ok = True
+        if _ok:
+            _draft_log(d)
     if sent:
         _save_symbols(syms)      # 只有真的推出去才记, 失败下轮还能重试
 
