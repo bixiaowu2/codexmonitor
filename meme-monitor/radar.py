@@ -307,6 +307,59 @@ def cycle(cfg,store,collector=None):
     current = {p['chain'] + ':' + p['address']: {'score': p['score_meta']['score'], 'liquidity_usd': p.get('liquidity_usd'),
                'pair_address':p.get('pair_address'),'source':p.get('source'),
                'safety_status':p['safety_status'],'safety_eligible':p['safety_eligible']} for p in assessed}
+    # --- candidates_archive: 落选者跟踪（只增不删，豁免 cleanup）---
+    _slot = int(now // 900)
+    _arch, _rej, _blocked_positive = [], [], 0
+    for p in assessed:
+        _sm = p.get('score_meta') or {}
+        _s = _sm.get('score', 0)
+        _ik = p['chain'] + ':' + p['address']
+        _blocked = p.get('safety_status') == 'blocked'
+        if _s > 0 and not _blocked:
+            _wh = p.get('wallet_research', {})
+            _wh_hits = _wh.get('wallet_hits', 0) if isinstance(_wh, dict) else 0
+            _arch.append((
+                f'{_ik}:{_slot}', p['chain'], p['address'], p.get('symbol'),
+                now, _s, _sm.get('stage', 'watch'), 1,
+                p.get('liquidity_usd'), p.get('volume_1h'),
+                p.get('buys_1h'), p.get('sells_1h'), p.get('change_1h'),
+                p.get('safety_status'),
+                json.dumps(p.get('safety_blocks') or [], ensure_ascii=False),
+                json.dumps(_sm.get('reasons') or [], ensure_ascii=False),
+                json.dumps(_sm.get('risk') or [], ensure_ascii=False),
+                _wh_hits, p.get('kol_hits', 0),
+                (seen.get(_ik) or {}).get('first_seen'),
+                p.get('price_usd'),
+                None, None, None, None, None, 0, 0,
+                json.dumps(_sm, ensure_ascii=False)))
+        elif _s == 0:
+            _fs = (seen.get(_ik) or {}).get('first_seen', now)
+            _rej.append((
+                _ik, p['chain'], p['address'], p.get('symbol'),
+                _fs, now,
+                p.get('liquidity_usd'), p.get('volume_1h'),
+                p.get('safety_status'),
+                json.dumps(p.get('safety_blocks') or [], ensure_ascii=False),
+                json.dumps(_sm.get('reasons') or [], ensure_ascii=False),
+                p.get('price_usd')))
+        elif _s > 0 and _blocked:
+            _blocked_positive += 1
+    with store.db() as _ad:
+        if _arch:
+            _ad.executemany('''INSERT OR IGNORE INTO candidates_archive
+              (key,chain,address,symbol,scanned_at,score,tier,passed,
+               liquidity,volume_1h,buys_1h,sells_1h,change_1h,safety,
+               safety_blocks,reasons,risk,wallet_hits,kol_hits,first_seen,
+               entry_price,peak_price,peak_multiple,last_price,last_at,max_at,
+               mark_count,stale,payload)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', _arch)
+        for _r in _rej:
+            _ad.execute('''INSERT OR IGNORE INTO candidates_rejected
+              (key,chain,address,symbol,first_seen,last_seen,seen_count,
+               liquidity,volume_1h,safety,safety_blocks,score_reasons,entry_price)
+              VALUES(?,?,?, ?,?,?,1, ?,?,?,?,?,?)''', _r)
+            _ad.execute('UPDATE candidates_rejected SET last_seen=?,seen_count=seen_count+1 WHERE key=?',
+                        (_r[5], _r[0]))
     store.put('candidate_scores', current)
     completed=time.time()
     with store.db() as d:
@@ -364,6 +417,7 @@ def cycle(cfg,store,collector=None):
     report={'version':VERSION,'as_of':completed,'started_at':now,'pairs_seen':len(pairs),'candidates':len(rows),'errors':errors,'sources':statuses,'chains':chains,'rows':rows,'events':events,'forward':forward,'social':social_health,'gmgn':gmgn_health,'binance_web3':binance_web3_health,'data_quality':data_quality(statuses,social_health),'safety':safety_counts,'blocked_rows':[p for p in assessed if p['safety_status']=='blocked'][:20],
             'notice':'公开DEX样本候选，不保证为Meme。安全检查来自第三方字段，未自行模拟买卖，不能保证可卖；unknown/disabled/有警告只做观察，不触发积极即时信号。LP锁仓、关联钱包和解锁未验证。X帖子来自共享采集或可选证据文件；提及不代表支持，不增加买入评分。钱包尚未自动跟踪。'}
     report['safety_coverage']=coverage
+    report['blocked_positive']=_blocked_positive
     report['post_research']={'version':'early-microcap-observe-v1','sample_size':len(representatives),
                             'matched':sum(p['post_research']['matched'] for p in representatives.values()),
                             'unknown':sum(p['post_research']['status']=='unknown' for p in representatives.values()),
