@@ -54,7 +54,7 @@ class Store:
    d.execute('DELETE FROM pairs WHERE observed<?',(now-7*86400,))
    # Candidate snapshots roll off after 90 days; resolved forward tracks after 30 days.
    d.execute('DELETE FROM signals WHERE created<?',(now-7*86400,))
-   d.execute("DELETE FROM forward_tracks WHERE created<? AND status!='open'",(now-7*86400,))
+   d.execute("DELETE FROM forward_tracks WHERE created<? AND status!='open'",(now-8*86400,))
    d.execute("DELETE FROM outbox WHERE created<? AND state!='pending'",(now-7*86400,))
    # candidates_archive and candidates_rejected are NOT cleaned up here.
    # They are append-only, retained ≥30 days, exempt from rolling deletion.
