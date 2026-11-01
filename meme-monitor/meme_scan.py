@@ -25,6 +25,59 @@ from notify import send_channel
 
 DATA = Path('/var/lib/meme-radar')
 MATCHES = DATA / 'meme_matches.json'
+
+# --- 2026-11-01 lead ad17 批准：候选池留痕（L1） ---------------------------
+# 为什么：meme_matches.json 每轮覆盖写，被筛掉的候选永远查不到，
+#   导致「入口规则有没有筛掉后来涨 10x 的标的」这个问题永远答不了。
+# 边界：只 append 日志，不参与任何筛选、不改 meme_matches.json、不改 paper_trade。
+CAND_DIR = DATA / 'candidates_history'
+CAND_KEEP_DAYS = 90
+
+
+def _log_candidates_history(cands, now=None):
+    """把本轮【全量】候选池追加到按天轮转的 JSONL。失败不影响扫描。"""
+    now = time.time() if now is None else now
+    items = []
+    for c in cands:
+        items.append({
+            'chain': c.get('chain'),
+            'address': str(c.get('address', '')).lower(),
+            'symbol': c.get('symbol'),
+            'tier': c.get('_tier', 'B'),
+            'liquidity_usd': c.get('liquidity_usd'),
+            'price_usd': c.get('price_usd'),
+            'score': c.get('_score', 0),
+        })
+    by = {'S': 0, 'A': 0, 'B': 0}
+    for i in items:
+        t = i['tier'] if i['tier'] in by else 'B'
+        by[t] += 1
+    rec = {'at': now, 'n_total': len(items), 'by_tier': by, 'items': items}
+    CAND_DIR.mkdir(parents=True, exist_ok=True)
+    day = time.strftime('%Y-%m-%d', time.gmtime(now))
+    with open(CAND_DIR / (day + '.jsonl'), 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    _rotate_cand_history(now)
+    return len(items)
+
+
+def _rotate_cand_history(now):
+    """90 天实际清理：按文件名日期删除超期文件。删不掉要喊出来，不许无限长。"""
+    import datetime as _dt
+    cutoff = _dt.datetime.utcfromtimestamp(now - CAND_KEEP_DAYS * 86400).date()
+    failed = []
+    for f in CAND_DIR.glob('*.jsonl'):
+        try:
+            d = _dt.date.fromisoformat(f.stem)
+        except Exception:
+            continue
+        if d < cutoff:
+            try:
+                f.unlink()
+            except Exception as e:
+                failed.append('%s(%s)' % (f.name, e))
+    if failed:
+        print('候选池留痕轮转失败(需人工处理): %s' % ', '.join(failed))
 STATE = DATA / 'scan_state.json'
 
 
@@ -613,6 +666,12 @@ def main():
                'tier': c.get('_tier', 'B')}
               for c in sa]
     MATCHES.write_text(json.dumps(s_tier, ensure_ascii=False, indent=2))
+    # 2026-11-01 lead ad17：全量候选池留痕（只记日志，不影响上面的写入）
+    try:
+        _n = _log_candidates_history(cands)
+        print('候选池留痕: %d 条 -> %s' % (_n, CAND_DIR))
+    except Exception as _e:
+        print('候选池留痕失败(不影响扫描): %s' % _e)
 
     ts = time.strftime('%m-%d %H:%M UTC', time.gmtime())
     prev = {}
