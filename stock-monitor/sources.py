@@ -8,6 +8,10 @@ from urllib.parse import quote as urlquote
 from net import get_json, FetchError
 
 YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/'
+# 2026-11-02 lead-stockfix ①（42ac+ba3b 合并批）：腾讯时间戳是无时区的北京墙钟，
+# 必须按 Asia/Shanghai 解析，不能跟本机 TZ 走；未来 5 分钟以上的报价一律丢弃。
+CN_TZ = ZoneInfo('Asia/Shanghai')
+FUTURE_GUARD = 5 * 60
 
 # ---------------- 腾讯行情兜底(Yahoo 失败时用) ----------------
 TENCENT_SNAP = 'https://qt.gtimg.cn/q='
@@ -53,10 +57,22 @@ def tencent_snapshot(symbol, item):
     if not price or price <= 0:
         return None
     now = time.time()
+    # f[30] = YYYYMMDDHHMMSS(北京墙钟)；解析失败退回观测时刻，超未来护栏则整条丢弃。
+    quote_at = now
+    stamp = str(f[30]).strip() if len(f) > 30 else ''
+    if stamp:
+        try:
+            quote_at = datetime.strptime(stamp, '%Y%m%d%H%M%S').replace(tzinfo=CN_TZ).timestamp()
+        except ValueError:
+            quote_at = now
+        if quote_at > now + FUTURE_GUARD:
+            return None
+    age = now - quote_at
     return {**item, 'price': price, 'change': num(32),
             'volume': num(6), 'volume_ratio': None,
-            'observed_at': now, 'quote_at': now, 'quote_age_seconds': 0,
-            'fresh_reason': 'tencent_snapshot', 'fresh': True,
+            'observed_at': now, 'quote_at': quote_at, 'quote_age_seconds': age,
+            'fresh_reason': 'fresh' if 0 <= age <= 900 else 'quote_stale_or_market_closed',
+            'fresh': 0 <= age <= 900,
             'currency': f[35].strip() if len(f) > 35 else None,
             'data_interval': 'snapshot', 'data_source': 'Tencent 腾讯行情(兜底)',
             'change_basis': '腾讯给出的涨跌幅(较昨收)', 'volume_basis': '腾讯成交量(无量比基准)'}
@@ -83,19 +99,22 @@ def tencent_m5(symbol, item):
     bars = []
     for r in rows:
         try:                                  # [时间(YYYYMMDDHHMM), 开, 收, 高, 低, 量, {}, 均价]
-            ts = time.mktime(time.strptime(str(r[0]), '%Y%m%d%H%M'))
+            ts = datetime.strptime(str(r[0]), '%Y%m%d%H%M').replace(tzinfo=CN_TZ).timestamp()
             close, vol = float(r[2]), float(r[5])
         except (ValueError, IndexError, TypeError):
             continue
-        if close <= 0 or ts + 300 > now + 3600:   # 排除未完成的当前根(留时区余量)
+        if close <= 0 or ts > now + FUTURE_GUARD or ts + 300 > now:   # 未来 5 分钟以上、或未完成的当前根，丢弃
             continue
         bars.append((ts, close, vol))
     if not bars:
         return None
     bars.sort()
     ts, price, volume = bars[-1]
-    session = time.strftime('%Y%m%d', time.localtime(ts))
-    earlier = [b for b in bars if time.strftime('%Y%m%d', time.localtime(b[0])) < session]
+    session = datetime.fromtimestamp(ts, CN_TZ).date()
+    # ③ 断言：最新根必须落在今天（北京时区）之内，早于今日开盘（含上一交易日）即整条无效。
+    if datetime.fromtimestamp(ts, CN_TZ).date() != datetime.fromtimestamp(now, CN_TZ).date():
+        return None
+    earlier = [b for b in bars if datetime.fromtimestamp(b[0], CN_TZ).date() < session]
     previous = earlier[-1][1] if earlier else None
     base_rows = [b[2] for b in bars[:-1][-20:]]
     base = sorted(base_rows)[len(base_rows) // 2] if len(base_rows) >= 5 else None
@@ -173,11 +192,44 @@ class Collector:
         for item in universe:
             symbol = item.get('symbol', '').strip()
             if not symbol: continue
+            up = symbol.upper()
+            is_a = up.endswith(('.SS', '.SZ'))
             try:
-                raw = get_json(YAHOO + urlquote(symbol, safe=''), self.timeout, params={'range': '5d', 'interval': '5m', 'includePrePost': 'false'})
-                rows.append(parse_chart(raw, item)); statuses.append({'symbol': symbol, 'status': 'ok'})
+                if is_a:
+                    # ② A股：腾讯 snapshot 优先(价格/涨跌/量)，m5 只用于补量比(③ 需量比场景)。
+                    row = None
+                    try:
+                        row = tencent_snapshot(symbol, item)
+                    except Exception:
+                        row = None
+                    if row:
+                        try:
+                            m5 = tencent_m5(symbol, item)
+                        except Exception:
+                            m5 = None
+                        if m5 and m5.get('volume_ratio') is not None:
+                            row['volume_ratio'] = m5['volume_ratio']
+                            row['volume_basis'] = m5.get('volume_basis')
+                    else:
+                        try:
+                            row = tencent_m5(symbol, item)
+                        except Exception:
+                            row = None
+                    if row:
+                        rows.append(row)
+                        statuses.append({'symbol': symbol, 'status': 'ok_fallback',
+                                         'via': row.get('data_source'), 'yahoo_error': None})
+                        time.sleep(self.spacing)
+                        continue
+                    # 腾讯两条都拿不到 → 按 ② 回落到 Yahoo 兜底
+                    raw = get_json(YAHOO + urlquote(symbol, safe=''), self.timeout, params={'range': '5d', 'interval': '5m', 'includePrePost': 'false'})
+                    rows.append(parse_chart(raw, item))
+                    statuses.append({'symbol': symbol, 'status': 'ok', 'via': 'yahoo_after_tencent_fail'})
+                else:
+                    raw = get_json(YAHOO + urlquote(symbol, safe=''), self.timeout, params={'range': '5d', 'interval': '5m', 'includePrePost': 'false'})
+                    rows.append(parse_chart(raw, item)); statuses.append({'symbol': symbol, 'status': 'ok'})
             except Exception as e:
-                # Yahoo 失败 → 腾讯兜底。A股 用 5分钟K线(含量比), 其它市场退到快照(量比 None)。
+                # 港股/美股 Yahoo 失败 → 腾讯兜底；A股 走到这里说明连 Yahoo 也失败。
                 fallback = None
                 for fn in (tencent_m5, tencent_snapshot):
                     try:
