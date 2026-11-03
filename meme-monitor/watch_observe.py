@@ -27,6 +27,14 @@ DATA = Path(os.environ.get('MEME_DATA', '/var/lib/meme-radar'))
 DB = DATA / 'meme-radar.sqlite'
 CAND_DIR = DATA / 'candidates_history'
 BACKOFF_FILE = DATA / 'watch_backoff.json'
+# 74bc 批（2026-11-02 lead d2a9 批准）：锚点池来源开关。
+# history（默认）= candidates_history/*.jsonl 留痕；archive = candidates_archive.first_seen。
+# 回滚办法：改回 history 或删掉该变量，下一轮即恢复原口径。
+SOURCE = (os.environ.get('MEME_WATCH_SOURCE') or 'history').strip().lower()
+if SOURCE not in ('history', 'archive'):
+    raise SystemExit('MEME_WATCH_SOURCE 非法: %r（只接受 history|archive）' % SOURCE)
+# archive 池只取 25 小时内的首见（覆盖 24h 档 + 1h 余量），避免每次全表扫 30 天。
+ARCHIVE_MAX_AGE = 86400 + 3600
 DEX = 'https://api.dexscreener.com'
 CHAIN_IDS = ('bsc', 'solana', 'robinhood', 'xlayer', 'arc')
 SLOTS = ((3600, '1h'), (21600, '6h'), (86400, '24h'))
@@ -57,8 +65,15 @@ def iso(ts):
 
 
 def load_first_seen(now, max_age=2 * 86400):
-    """取每个 (chain,address) 首次出现时刻/价；2 天内文件足够覆盖 24h 档。"""
+    """取每个 (chain,address) 首次出现时刻/价；按 SOURCE 选池。
+
+    history: 读 candidates_history/*.jsonl（2 天内文件足够覆盖 24h 档）。
+    archive: 读 candidates_archive，first_seen 取该 (chain,address) 的 min，
+             price/liquidity 取该最早 scanned_at 行的 entry_price/liquidity。
+    """
     first = {}
+    if SOURCE == 'archive':
+        return load_first_seen_archive(now)
     if not CAND_DIR.exists():
         return first
     for f in sorted(CAND_DIR.glob('*.jsonl')):
@@ -75,7 +90,9 @@ def load_first_seen(now, max_age=2 * 86400):
                     continue
                 for it in rec.get('items') or ():
                     chain = (it.get('chain') or '').lower()
-                    addr = str(it.get('address') or '').lower()
+                    # Solana 地址 base58 大小写敏感（2026-11-02 lead c3e2fwd）：
+                    # 保留原文大小写，不再 lower()，否则身份键与归档/signals 无法精确 join
+                    addr = str(it.get('address') or '').strip()
                     if not chain or not addr:
                         continue
                     k = (chain, addr)
@@ -84,6 +101,41 @@ def load_first_seen(now, max_age=2 * 86400):
                                     'liquidity_usd': it.get('liquidity_usd')}
         except Exception as e:
             print('候选池留痕读取失败 %s: %s' % (f.name, e))
+    return first
+
+
+def load_first_seen_archive(now):
+    """从 candidates_archive 取锚点（74bc）。只读，不写归档表。
+
+    first_seen 为该标的在归档表里的最小首见时刻；价格取对应最早一行的
+    entry_price（无则 NULL），流动性取同一行 liquidity。原文照抄，不改写。
+    """
+    first = {}
+    cutoff = now - ARCHIVE_MAX_AGE
+    db = sqlite3.connect('file:%s?mode=ro' % DB, uri=True, timeout=30)
+    try:
+        rows = db.execute(
+            'SELECT chain, address, first_seen, entry_price, liquidity '
+            'FROM candidates_archive WHERE first_seen IS NOT NULL '
+            'AND first_seen >= ? '
+            'ORDER BY chain, address, first_seen ASC, scanned_at ASC',
+            (cutoff,))
+        for chain, addr, fs, price, liq in rows:
+            chain = (chain or '').lower()
+            # 同上：归档里的 solana 地址是 base58 原文，不得 lower()
+            addr = str(addr or '').strip()
+            if not chain or not addr:
+                continue
+            k = (chain, addr)
+            if k in first:
+                continue  # 已按 first_seen 升序，首行即最早的
+            try:
+                at = float(fs)
+            except (TypeError, ValueError):
+                continue
+            first[k] = {'at': at, 'price_usd': price, 'liquidity_usd': liq}
+    finally:
+        db.close()
     return first
 
 
@@ -110,13 +162,17 @@ def fetch_batch(col, chain, addrs):
         return out, 'backoff'
     time.sleep(max(0, col.spacing - (time.monotonic() - col.last)))
     col.last = time.monotonic()
+    # 请求侧 addrs 为 base58 原文；接口回传也应是原文。仍按大小写不敏感建索引，
+    # 只为容错，但返回值一律用请求侧的原始大小写做键，避免身份键再被写漂。
+    want = dict((a.lower(), a) for a in addrs)
     try:
         data = get_json('%s/tokens/v1/%s/%s' % (DEX, chain, ','.join(addrs)), col.timeout)
         if not isinstance(data, list):
             raise FetchError('invalid_schema')
         for p in data:
-            addr = str((p.get('baseToken') or {}).get('address') or '').lower()
-            if addr not in addrs:
+            raw = str((p.get('baseToken') or {}).get('address') or '').strip()
+            addr = want.get(raw.lower())
+            if addr is None:
                 continue
             try:
                 price = float(p.get('priceUsd')) if p.get('priceUsd') not in (None, '') else None
