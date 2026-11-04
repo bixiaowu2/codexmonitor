@@ -58,6 +58,11 @@ DDL = '''CREATE TABLE IF NOT EXISTS candidate_watch_observations (
 # a6d7 批：first_seen 记账字段。新行记锚点首见时刻（iso(info['at'])，原文照抄候选留痕）；
 # 历史行留空，不倒推补填。
 FIRST_SEEN_DDL = 'ALTER TABLE candidate_watch_observations ADD COLUMN first_seen TEXT'
+# 2026-11-03 fa79 批：due_at 记账字段。记该时点的应采时刻
+# （first_seen + 档位秒数），observed 仍为实际取价时刻。
+# 分析侧可用 observed - due_at 算偏差并过滤，不再靠时间戳猜。
+# 历史行留空，不倒推补填。
+DUE_AT_DDL = 'ALTER TABLE candidate_watch_observations ADD COLUMN due_at TEXT'
 
 
 def iso(ts):
@@ -203,6 +208,11 @@ def main():
     except sqlite3.OperationalError as e:
         if 'duplicate column' not in str(e):
             raise
+    try:
+        db.execute(DUE_AT_DDL)
+    except sqlite3.OperationalError as e:
+        if 'duplicate column' not in str(e):
+            raise
     db.commit()
 
     first = load_first_seen(now)
@@ -251,32 +261,38 @@ def main():
             for addr in chunk:
                 info = first[(chain, addr)]
                 slots = pending[chain][addr]
+                # 2026-11-03 fa79 批：多档同时逾期（进程停摆/长退避后恢复）时，
+                # 只补最近一档；更早的档位缺就是缺，不再用当前价冒充历史时点。
+                due_slots = [s for s in slots if s != 'first']
+                if len(due_slots) > 1:
+                    due_slots = [max(due_slots, key=lambda x: SLOT_SECS[x])]
                 rows = []
                 if 'first' in slots:
                     rows.append(('first', iso(info['at']), info['price_usd'],
-                                 info['liquidity_usd']))
+                                 info['liquidity_usd'], iso(info['at'])))
                 if addr in got:
                     price, liq = got[addr]
-                    rows.extend((s, ts, price, liq) for s in slots if s != 'first')
+                    rows.extend((s, ts, price, liq,
+                                 iso(info['at'] + SLOT_SECS[s]))
+                                for s in due_slots)
                 else:
                     # 查不到价：宽限期内留待下轮；超窗则落 NULL 行，明示缺失
-                    for s in slots:
-                        if s == 'first':
-                            continue
+                    for s in due_slots:
                         due = info['at'] + SLOT_SECS[s]
                         if now_ts - due >= GRACE:
-                            rows.append((s, ts, None, None))
+                            rows.append((s, ts, None, None,
+                                         iso(info['at'] + SLOT_SECS[s])))
                     if not rows:
                         continue
                 pk = peak.get((chain, addr))
-                for slot, obs, price, liq in rows:
+                for slot, obs, price, liq, due_at in rows:
                     if price is not None:
                         pk = price if pk is None else max(pk, price)
                     db.execute(
                         'INSERT OR IGNORE INTO candidate_watch_observations'
-                        '(chain,address,observed,price_usd,liquidity_usd,slot,peak_price_usd,first_seen)'
-                        ' VALUES(?,?,?,?,?,?,?,?)',
-                        (chain, addr, obs, price, liq, slot, pk, iso(info['at'])))
+                        '(chain,address,observed,price_usd,liquidity_usd,slot,peak_price_usd,first_seen,due_at)'
+                        ' VALUES(?,?,?,?,?,?,?,?,?)',
+                        (chain, addr, obs, price, liq, slot, pk, iso(info['at']), due_at))
                     inserted += 1
         db.commit()
         save_backoff(col)
