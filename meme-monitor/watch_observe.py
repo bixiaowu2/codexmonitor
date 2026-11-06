@@ -33,8 +33,9 @@ BACKOFF_FILE = DATA / 'watch_backoff.json'
 SOURCE = (os.environ.get('MEME_WATCH_SOURCE') or 'history').strip().lower()
 if SOURCE not in ('history', 'archive'):
     raise SystemExit('MEME_WATCH_SOURCE 非法: %r（只接受 history|archive）' % SOURCE)
-# archive 池只取 25 小时内的首见（覆盖 24h 档 + 1h 余量），避免每次全表扫 30 天。
-ARCHIVE_MAX_AGE = 86400 + 3600
+# 24h 档 + 6h 宽限 = 30h，再留 1h 余量。原来只取 25h，导致 24h 档查不到价的标的
+# 在宽限期内就被踢出锚点池，连 NULL 行都写不下（实测 11-04 的 24h 覆盖率只剩 45%）。
+ARCHIVE_MAX_AGE = 86400 + 21600 + 3600
 DEX = 'https://api.dexscreener.com'
 CHAIN_IDS = ('bsc', 'solana', 'robinhood', 'xlayer', 'arc')
 SLOTS = ((3600, '1h'), (21600, '6h'), (86400, '24h'))

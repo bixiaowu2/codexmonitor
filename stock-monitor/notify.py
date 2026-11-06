@@ -14,5 +14,6 @@ def send_channel(cfg, text, channel):
         if not isinstance(r, dict) or r.get('ok') is not True: raise RuntimeError('telegram_rejected')
     elif channel == 'dingtalk' and cfg.dingtalk_enabled:
         r = post_json(ding_url(cfg.dingtalk_webhook, cfg.dingtalk_secret), {'msgtype': 'text', 'text': {'content': cfg.dingtalk_keyword + '\n' + text}, 'at': {'isAtAll': False}}, cfg.timeout)
-        if not isinstance(r, dict) or r.get('errcode') != 0: raise RuntimeError('dingtalk_rejected')
+        if not isinstance(r, dict) or r.get('errcode') != 0:
+            raise RuntimeError('dingtalk_rejected code=%s msg=%s' % ((r.get('errcode'), (r.get('errmsg') or '')[:50]) if isinstance(r, dict) else (r, '')))
     else: raise RuntimeError('channel_disabled')

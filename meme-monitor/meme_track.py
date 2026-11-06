@@ -68,6 +68,16 @@ def dt_send(env, text):
 DT_INTERVAL = 3600   # 钉钉每小时最多汇总一条
 DT_BUFFER_MAX = 30   # 缓冲上限(钉钉配额耗尽时不至于无限增长)
 
+def _dt_digest(buf, limit=19000):
+    """按字节从最新往回装；超出钉钉 text 上限(20000B)的旧条目丢弃，避免整条被拒。"""
+    out, total = [], 0
+    for item in reversed(buf):
+        b = len(item.encode('utf-8')) + 2
+        if total + b > limit:
+            break
+        out.append(item); total += b
+    return '\n\n'.join(reversed(out)), len(out)
+
 
 def notify(env, token, chat, body):
     """Telegram 即时推送。钉钉不再逐条发, 改为入缓冲、由 flush_dingtalk 每小时汇总一条。
@@ -96,8 +106,9 @@ def flush_dingtalk(env, state):
     # 无论成败都重置窗口: 否则配额耗尽(90030)时会每轮重试, 节流失效。
     state['dt_last'] = time.time()
     try:
-        dt_send(env, '\n\n'.join(buf))
-        print(f'dingtalk: sent (汇总 {len(buf)} 条)')
+        txt, n = _dt_digest(buf)
+        dt_send(env, txt)
+        print(f'dingtalk: sent (汇总 {n}/{len(buf)} 条)')
         state['dt_buffer'] = []
     except Exception as e:
         print('dt fail:', str(e)[:100])

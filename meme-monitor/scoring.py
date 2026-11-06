@@ -1,6 +1,9 @@
 from __future__ import annotations
 import math,time
 
+# 6110r 2026-11-06: kol/wallet 权重归零后，其余五项(age/flow/vol/liq/momentum)满分；上限仍标 100
+EFFECTIVE_MAX = 84
+
 def age_minutes(p,now):
     created=p.get('created_at')
     if not created:return None
@@ -9,13 +12,15 @@ def age_minutes(p,now):
     return max(0,(now-created)/60)
 
 def score(p,wallet_hits=0,kol_hits=0):
-    liq=p.get('liquidity_usd') or 0;v=p.get('volume_1h') or 0; buys=p.get('buys_1h') or 0;sells=p.get('sells_1h') or 0
+    # 两键互斥: 雷达侧写 liquidity_usd, bn 风格源(meme_rush)写 liquidity，两个都查
+    _lq=p.get('liquidity'); liq=p.get('liquidity_usd') or (_lq if isinstance(_lq,(int,float)) else 0) or 0;v=p.get('volume_1h') or 0; buys=p.get('buys_1h') or 0;sells=p.get('sells_1h') or 0
     if liq<5000 or v<1000:return {'score':0,'stage':'blocked','reasons':['流动性或1小时成交额过低']}
     safety=p.get('safety_status','disabled')
     if safety=='blocked':return {'score':0,'stage':'blocked','reasons':['可卖性/合约安全检查阻断'],'risk':p.get('safety_blocks',[]),'safety_status':safety,'safety_blocks':p.get('safety_blocks',[]),'safety_warnings':p.get('safety_warnings',[])}
     age=age_minutes(p,time.time()); age_bonus=18 if age is not None and age<=180 else 8 if age is not None and age<=1440 else 0
     buy_ratio=buys/max(buys+sells,1) if p.get('buys_1h') is not None and p.get('sells_1h') is not None else .5; flow=18*min(max((buy_ratio-.5)*2,0),1); vol=18*min(v/max(liq,1),4)/4; liq_score=15*min(liq/100000,1); momentum=15*min(max((p.get('change_1h') or 0)/30,0),1)
-    wallet=12*min(wallet_hits/3,1); kol=10*min(kol_hits/2,1); scorev=round(min(100,age_bonus+flow+vol+liq_score+momentum+wallet+kol),1)
+    # 6110r 2026-11-06: kol(10)/wallet(12)权重归零；命中字段仍记录(reasons/kol_hits)，不补数据源；其余五项满分 84
+    wallet=0*min(wallet_hits/3,1); kol=0*min(kol_hits/2,1); scorev=round(min(100,age_bonus+flow+vol+liq_score+momentum+wallet+kol),1)
     reasons=[]
     if age_bonus:reasons.append('早期池')
     if buy_ratio>.6:reasons.append(f'1h买入交易笔数占比{buy_ratio:.0%}')
@@ -33,4 +38,4 @@ def score(p,wallet_hits=0,kol_hits=0):
         scorev=round(scorev*.7,1); risk.append('可卖性尚未核验；不会触发即时买入提示')
     if safety=='safe': reasons.append('未检出已知硬风险（不保证可卖）')
     risk.extend(p.get('safety_warnings') or [])
-    return {'score':scorev,'stage':'hot' if scorev>=70 else 'watch','reasons':reasons,'risk':risk,'buy_ratio':buy_ratio,'age_minutes':age,'safety_status':safety,'safety_blocks':p.get('safety_blocks',[]),'safety_warnings':p.get('safety_warnings',[])}
+    return {'score':scorev,'stage':'hot' if scorev>=70 else 'watch','effective_max':EFFECTIVE_MAX,'reasons':reasons,'risk':risk,'buy_ratio':buy_ratio,'age_minutes':age,'safety_status':safety,'safety_blocks':p.get('safety_blocks',[]),'safety_warnings':p.get('safety_warnings',[])}

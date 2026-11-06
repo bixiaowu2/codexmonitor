@@ -86,6 +86,16 @@ STATE = DATA / 'scan_state.json'
 # 故把钉钉改为"入缓冲 + 每 DT_INTERVAL 汇总一条"; Telegram 不受影响, 仍即时。
 DT_INTERVAL = 21600
 DT_BUFFER_MAX = 30
+
+def _dt_digest(buf, limit=19000):
+    """按字节从最新往回装；超出钉钉 text 上限(20000B)的旧条目丢弃，避免整条被拒。"""
+    out, total = [], 0
+    for item in reversed(buf):
+        b = len(item.encode('utf-8')) + 2
+        if total + b > limit:
+            break
+        out.append(item); total += b
+    return '\n\n'.join(reversed(out)), len(out)
 _DT_STATE = DATA / 'dt_digest.json'
 
 
@@ -143,8 +153,9 @@ def notify(env, body):
             return sent
         d['last'] = time.time()   # 无论成败都重置, 否则配额耗尽时每轮重试
         try:
-            send_channel(cfg, '\n\n'.join(buf), 'dingtalk')
-            print(f'dingtalk: sent (汇总 {len(buf)} 条)'); sent = True
+            txt, n = _dt_digest(buf)
+            send_channel(cfg, txt, 'dingtalk')
+            print(f'dingtalk: sent (汇总 {n}/{len(buf)} 条)'); sent = True
             d['buf'] = []
         except Exception as e:
             print('dt fail:', str(e)[:100])

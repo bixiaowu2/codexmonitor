@@ -13,6 +13,6 @@ def send_channel(cfg,text,channel):
  elif channel=='dingtalk' and cfg.dingtalk_enabled:
   body={'msgtype':'text','text':{'content':cfg.dingtalk_keyword+' · Meme雷达\n'+text},'at':{'isAtAll':False}}
   r=post_json(ding_url(cfg.dingtalk_webhook,cfg.dingtalk_secret),body,cfg.timeout)
-  if not isinstance(r,dict) or r.get('errcode')!=0:raise RuntimeError('dingtalk_rejected')
+  if not isinstance(r,dict) or r.get('errcode')!=0:raise RuntimeError('dingtalk_rejected code=%s'%(r.get('errcode') if isinstance(r,dict) else 'non-dict'))
 
  else:raise RuntimeError("channel_disabled")

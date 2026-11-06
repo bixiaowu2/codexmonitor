@@ -61,17 +61,31 @@ def report(store,now=None,force=False):
     for (version,role,stage),items in grouped.items():
         mature=[t for t in items if now-t['opened']>=90*86400]
         observed=[t for t in mature if 'price_multiple' in json.loads(t['horizons']).get('2160',{}) and not t['suspect_jump']]
+        hit_2x=sum(t['peak']/t['entry']>=2 for t in items)
+        hold_2x=sum(t['peak']/t['entry']>=2 and t['last']/t['entry']>=2 for t in items)
+        hit_5x=sum(t['peak']/t['entry']>=5 for t in items)
+        hold_5x=sum(t['peak']/t['entry']>=5 and t['last']/t['entry']>=5 for t in items)
         rows.append({'version':version,'role':role,'stage':stage,'tracks':len(items),'mature_90d':len(mature),'usable_90d':len(observed),
-                     'observed_5x':sum(t['peak']/t['entry']>=5 for t in items),'observed_10x':sum(t['peak']/t['entry']>=10 for t in items),'observed_100x':sum(t['peak']/t['entry']>=100 for t in items),
+                     'observed_2x':hit_2x,'observed_5x':sum(t['peak']/t['entry']>=5 for t in items),'observed_10x':sum(t['peak']/t['entry']>=10 for t in items),'observed_100x':sum(t['peak']/t['entry']>=100 for t in items),
+                     'hold_2x':hold_2x,'hold_rate_2x':round(hold_2x/hit_2x*100,1) if hit_2x else 'n/a',
+                     'hold_5x':hold_5x,'hold_rate_5x':round(hold_5x/hit_5x*100,1) if hit_5x else 'n/a',
                      'suspect_jump_tracks':sum(bool(t['suspect_jump']) for t in items),'tracks_with_gap_over_hour':sum(t['max_gap']>3600 for t in items)})
+    pool_2x=sum(t['peak']/t['entry']>=2 for t in tracks);pool_hold_2x=sum(t['peak']/t['entry']>=2 and t['last']/t['entry']>=2 for t in tracks)
+    pool_5x=sum(t['peak']/t['entry']>=5 for t in tracks);pool_hold_5x=sum(t['peak']/t['entry']>=5 and t['last']/t['entry']>=5 for t in tracks)
     result={'as_of':utc(now*1000),'rule_version':VERSION,'tracks':len(tracks),'groups':rows,'positions_by_mode':position_counts,
+            'pool_2x':pool_2x,'pool_hold_2x':pool_hold_2x,'pool_hold_rate_2x':round(pool_hold_2x/pool_2x*100,1) if pool_2x else 'n/a',
+            'pool_5x':pool_5x,'pool_hold_5x':pool_hold_5x,'pool_hold_rate_5x':round(pool_hold_5x/pool_5x*100,1) if pool_5x else 'n/a',
+            'hold_rate_method':'hold rate = among tracks whose sampled peak reached Nx, share whose latest observed price still >=Nx of entry; sampled quotes, not realized exits',
             'optimization_status':'collecting_prospective_evidence_no_automatic_threshold_change',
             'method':'Signal and deterministic daily control cohorts; same token can appear in both, not independent trials; sampled quote paths, no orders/fees/slippage.',
             'limitations':['100x observed maximum is not realized profit or an estimated success probability','Controls cover freshly observed eligible assets, not a complete historical universe or all missed pumps','Changes need chronological holdout, asset-level grouping, sufficient mature cases and versioned forward testing; no blind winner-based tuning']}
     dump(store.folder/'evaluation-report.json',result)
     lines=['# 前瞻效果复盘',f'UTC {result["as_of"]}',f'当前记录 {len(tracks)} 条；仅积累证据，未自动修改策略阈值。',
-           '|版本|类别|阶段|记录|满90天|90天端点可用|采样触及5倍|10倍|100倍|异常跳价|超过1小时采样空档|','|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|']
-    for r in rows:lines.append('|'+ '|'.join(str(r[k]) for k in ('version','role','stage','tracks','mature_90d','usable_90d','observed_5x','observed_10x','observed_100x','suspect_jump_tracks','tracks_with_gap_over_hour'))+'|')
+           f'全池：触及2倍 {pool_2x} 条，末价仍≥2倍 {pool_hold_2x} 条，可持有率 {pool_hold_2x/pool_2x*100:.1f}%' if pool_2x else '全池：触及2倍 0 条，可持有率 n/a（无样本）',
+           f'全池：触及5倍 {pool_5x} 条，末价仍≥5倍 {pool_hold_5x} 条，可持有率 {pool_hold_5x/pool_5x*100:.1f}%' if pool_5x else '全池：触及5倍 0 条，可持有率 n/a（无样本）',
+           '可持有率口径：采样峰值触及N倍的标的中，最新采样价仍≥N倍的比例；为采样价，非实际退出收益。',
+           '|版本|类别|阶段|记录|满90天|90天端点可用|采样触及5倍|10倍|100倍|触及2倍|可持有2倍|可持有率2倍|可持有5倍|可持有率5倍|异常跳价|超过1小时采样空档|','|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+    for r in rows:lines.append('|'+ '|'.join(str(r[k]) for k in ('version','role','stage','tracks','mature_90d','usable_90d','observed_5x','observed_10x','observed_100x','observed_2x','hold_2x','hold_rate_2x','hold_5x','hold_rate_5x','suspect_jump_tracks','tracks_with_gap_over_hour'))+'|')
     lines+=['实际持仓和假定买入参考仓分开记录。峰值倍数不是可实现收益；未扣费用、滑点或模拟完整退出。',
             '同币多信号不是独立样本。参数修改应按时间留出后续样本，并按资产分组，避免训练/验证泄漏。只有赢家不能验证规律；0个成熟样本也不代表0%成功率。',
             '不追溯填入上线前最低价，不用当前市值伪造历史特征。对照仅来自实际检查到的新鲜可用报价，不代表完整漏检率。']

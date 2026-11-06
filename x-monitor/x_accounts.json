@@ -473,6 +473,132 @@
       "reviewed_at": "2026-10-18",
       "score_weight": 0,
       "track_record": "not_backtested"
+    },
+    {
+      "handle": "glassnode",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://glassnode.com"
+      ],
+      "reason": "Glassnode 官方链上数据与指标，用于数据背景，不作为喊单信号。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "cryptoquant",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://cryptoquant.com"
+      ],
+      "reason": "CryptoQuant 官方链上数据与交易所流量指标，用于数据背景。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "whale_alert",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://whale-alert.io"
+      ],
+      "reason": "Whale Alert 大额链上转账提醒，用于资金动向背景。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "arkhamintel",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://arkhamintelligence.com"
+      ],
+      "reason": "Arkham 链上实体与钱包标签数据，用于背景核查。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "dune",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://dune.com"
+      ],
+      "reason": "Dune 链上数据看板与查询，用于数据背景。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "wublockchain",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "market_commentator",
+      "evidence": [
+        "https://x.com/WuBlockchain"
+      ],
+      "reason": "吴说区块链，中文加密资讯，用于新闻背景。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
+    },
+    {
+      "handle": "polymarket",
+      "chains": [
+        "bsc",
+        "solana"
+      ],
+      "category": "research",
+      "evidence": [
+        "https://polymarket.com"
+      ],
+      "reason": "Polymarket 预测市场官方数据，用于市场情绪与赔率背景。",
+      "interval_seconds": 900,
+      "priority": 10,
+      "enabled": true,
+      "reviewed_at": "2026-11-05",
+      "track_record": "not_backtested",
+      "score_weight": 0
     }
   ]
 }

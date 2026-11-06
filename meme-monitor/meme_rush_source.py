@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, '/opt/meme-radar')
 import forward                                              # noqa: E402
+import scoring                                              # noqa: E402
 
 ENDPOINT = ('https://web3.binance.com/bapi/defi/v1/public/wallet-direct/'
             'buw/wallet/market/token/pulse/rank/list/ai')
@@ -101,6 +102,23 @@ def features_of(row):
     return f
 
 
+def score_of(f):
+    """给旁路样本补一份关注分(只补覆盖, 不动任何选币/评分规则)。
+
+    字段名对齐 scoring.score() 的口径: bn 风格键(volume/countBuy/countSell/
+    priceChange/createTime)映射到 volume_1h/buys_1h/sells_1h/change_1h/created_at;
+    liquidity 同时给 liquidity_usd —— scoring.py 现已两键都查。
+    safety_status 保持 disabled: 这条路本来就不做合约安全检查。
+    """
+    view = {'liquidity_usd': f.get('liquidity'),
+            'volume_1h': f.get('volume'),
+            'buys_1h': f.get('countBuy'),
+            'sells_1h': f.get('countSell'),
+            'change_1h': f.get('priceChange'),
+            'created_at': f.get('createTime') or None}
+    return scoring.score(view)
+
+
 def run_once(dry=False, verbose=True):
     if not DB.exists():
         print('找不到账本', DB)
@@ -130,9 +148,13 @@ def run_once(dry=False, verbose=True):
                     continue
                 key = f'meme-rush-v1:{stage}:{chain}:{addr.lower()}:{bucket}'
                 instrument = f'{chain}:{addr if chain == "solana" else addr.lower()}'
+                feats = features_of(row)
+                sc = score_of(feats)
                 payload = {'kind': 'meme_rush_observation', 'stage': stage, 'rank_type': rank,
                            'chain': chain, 'source': 'meme_rush',
-                           'features': features_of(row)}
+                           'score': sc, 'reasons': sc.get('reasons', []),
+                           'risk': sc.get('risk', []),
+                           'features': feats}
                 if not dry:
                     forward.register(db, key, instrument, str(row.get('symbol') or '?'),
                                      chain, price, payload, now)

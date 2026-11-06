@@ -84,7 +84,11 @@ class Collector:
                     code=e.code if isinstance(e,FetchError) else type(e).__name__
                     self.failures[key]=self.failures.get(key,0)+1
                     suggested=getattr(e,'retry_after',None)
-                    delay=min(900,max(60*2**min(self.failures[key]-1,4),suggested or 0))
+                    # 429 是限流不是故障：封顶 300s，避免一次限流被指数退避放大成 15 分钟黑屏。
+                    # GeckoTerminal 常回 Retry-After: 0（语义是"稍后再试"），不能用 or 0 丢掉。
+                    exp=60*2**min(self.failures[key]-1,4)
+                    if suggested is not None and suggested>exp: exp=suggested
+                    delay=min(300 if code=='http_429' else 900, exp)
                     self.backoff[key]=time.time()+delay
                     status.update(status='failed',error=code,retry_at=self.backoff[key],retry_after=suggested)
                 statuses.append(status)

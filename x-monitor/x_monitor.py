@@ -277,6 +277,10 @@ def dingtalk_quota_backoff_until(now: float | None = None) -> float:
 def target_backoff_until(target: WebhookTarget, error: Exception, now: float | None = None) -> float | None:
     if target.kind == "dingtalk" and "errcode=90030" in str(error):
         return dingtalk_quota_backoff_until(now)
+    if "HTTP 429" in str(error):
+        # 限流（Server酱免费版日配额很低）。30 秒硬重试只会继续 429，退避到下一个整点。
+        base = time.time() if now is None else now
+        return (int(base // 3600) + 1) * 3600
     return None
 
 
@@ -495,8 +499,9 @@ def deliver_pending(state: dict[str, Any], routes: dict[str, list[WebhookTarget]
                 until = target_backoff_until(target, exc, now)
                 if until is not None:
                     backoff[target_id] = until
-                    LOG.error("delivery paused for %s (%s): DingTalk monthly quota exhausted until %s",
-                              tweet.url, target.kind, datetime.fromtimestamp(until, timezone.utc).isoformat())
+                    LOG.error("delivery paused for %s (%s) until %s: %s",
+                              tweet.url, target.kind, datetime.fromtimestamp(until, timezone.utc).isoformat(),
+                              str(exc)[:80])
                 else:
                     LOG.error("delivery failed for %s (%s): %s", tweet.url, target.kind, type(exc).__name__)
                 continue
