@@ -234,6 +234,11 @@ def normalize_rank_item(item, internal_chain):
             'renowned_count': item.get('renowned_count'),
             'bundler_rate': item.get('bundler_rate'),
             'swaps': item.get('swaps'),
+            # 2026-11-06 路线 C：GMGN 源涨跌幅，仅落库，键名带 gmgn_ 前缀，
+            # 不进 scoring.py 读取路径（那里读的是 change_1h / change_5m）。
+            'gmgn_change_1h': _number(item.get('price_change_percent1h')),
+            'gmgn_change_5m': _number(item.get('price_change_percent5m')),
+            'gmgn_change_1m': _number(item.get('price_change_percent1m')),
             'checked_at': time.time(),
         },
     }
