@@ -17,12 +17,14 @@ sys.path.insert(0, '/opt/alpha-radar')
 from radar import PublicAPI, TOKENS, FUTURES, universe, num
 from binance_official import token_list
 import dingtalk
+import spot_new_listings
 
 DATA = Path('/var/lib/demon-radar')
 SNAPSHOT = DATA / 'matches.json'
 STATE = DATA / 'notify_state.json'
 GOPLUS_DELAY = 0.6
 HEARTBEAT_SECONDS = 24 * 3600
+RUN_UTC = None  # 本轮进程启动时刻, 全轮共用(lead 4081: 小时级精度, 非公告时间)
 
 
 def load_env():
@@ -121,6 +123,8 @@ def goplus(api, addr, cache_dir):
 
 
 def main():
+    global RUN_UTC
+    RUN_UTC = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     env = load_env()
     min_oi = num(env.get('DEMON_MIN_OI_USDT', '5000000')) or 5000000
     min_top10 = num(env.get('DEMON_MIN_CLEANED_TOP10', '0.40')) or 0.40
@@ -133,6 +137,12 @@ def main():
     pairs, _ = universe(tokens, fx)
     spot = api.get('https://api.binance.com/api/v3/exchangeInfo')
     spot_bases = {s.get('baseAsset') for s in spot.get('symbols', []) if s.get('status') == 'TRADING'}
+    # 现货新上市回溯(lead 4081 核定): 复用上面这份 spot exchangeInfo, 0 额外请求;
+    # 独立落盘 spot_new_listings.json, 不动 matches.json; 失败不影响主流程。
+    try:
+        spot_new_listings.run(spot, RUN_UTC)
+    except Exception as e:
+        print('spot-new-listings failed:', str(e)[:160], flush=True)
 
     def phase1(p):
         t, f = p['token'], p['future']

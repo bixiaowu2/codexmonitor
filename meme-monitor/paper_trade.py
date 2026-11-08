@@ -256,6 +256,16 @@ def run():
     db.commit()
     db.close()
     print(f'纸面交易: 新开仓 {opened} | 平仓 {closed}')
+    # 2026-11-07: A/B 实验臂(H2) —— 独立库 paper_trade_ab.sqlite，同进程同一时刻取价。
+    # 裁定 lead 0945Z-8851 / home 101606Z-78fa: 不新增 timer/unit，挂本周期跑。
+    # AB_ENABLED=0 可临时关掉；实验臂异常不得影响对照臂主流程。
+    try:
+        import os
+        if os.environ.get('AB_ENABLED', '1') != '0':
+            import paper_trade_ab
+            paper_trade_ab.run(matches, now=now)
+    except Exception as e:
+        print(f'实验臂 H2 跳过(异常): {type(e).__name__}: {e}')
     return 0
 
 
@@ -307,5 +317,15 @@ if __name__ == '__main__':
     import sys
     if '--report' in sys.argv:
         report()
+    elif '--ab' in sys.argv:
+        # 只跑实验臂(H2)，不碰对照臂主库 —— 用于手动验证/补跑
+        import json as _json
+        import paper_trade_ab
+        _rows = _json.loads(MATCHES.read_text())
+        _m = {(x.get('chain'), str(x.get('address', '')).lower()): x for x in _rows}
+        paper_trade_ab.run(_m)
+    elif '--ab-report' in sys.argv:
+        import paper_trade_ab
+        paper_trade_ab.report()
     else:
         raise SystemExit(run())
