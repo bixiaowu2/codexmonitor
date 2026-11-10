@@ -37,10 +37,12 @@ if SOURCE not in ('history', 'archive'):
 # 在宽限期内就被踢出锚点池，连 NULL 行都写不下（实测 11-04 的 24h 覆盖率只剩 45%）。
 ARCHIVE_MAX_AGE = 86400 + 21600 + 3600
 DEX = 'https://api.dexscreener.com'
+JUP = 'https://lite-api.jup.ag'
 CHAIN_IDS = ('bsc', 'solana', 'robinhood', 'xlayer', 'arc')
 SLOTS = ((3600, '1h'), (21600, '6h'), (86400, '24h'))
 SLOT_SECS = dict((name, secs) for secs, name in SLOTS)
 BATCH = 30
+JUP_BATCH = 100
 # 时点窗口：到点后仍查不到价，宽限 6 小时继续重试；超窗则记一行 price_usd=NULL，
 # 明示「该时点查不到价」，避免同批死链每 10 分钟被无限重试。
 GRACE = 21600
@@ -160,6 +162,64 @@ def save_backoff(col):
     tmp.replace(BACKOFF_FILE)
 
 
+def fetch_batch_jupiter(col, addrs):
+    """solana 专用：Jupiter /price/v3 批量取价（一次最多 100 个，免费）。
+
+    2026-11-10：DexScreener /tokens/v1 对 solana 返回错误价——实测某币 9.185e-06 → 334.57
+    再回落到 0.0012（3600 万倍），且 1h/6h 逐位相同。Jupiter 直接给 usdPrice + liquidity，
+    没有 usdPrice 的正是流动性≈0 的死币，天然就是失败信号。
+    """
+    key = 'jupiter:price:v3'
+    out = {}
+    if col.backoff.get(key, 0) > time.time():
+        return out, 'backoff'
+    time.sleep(max(0, col.spacing - (time.monotonic() - col.last)))
+    col.last = time.monotonic()
+    want = dict((a.lower(), a) for a in addrs)
+    try:
+        data = get_json('%s/price/v3?ids=%s' % (JUP, ','.join(addrs)), col.timeout)
+        if not isinstance(data, dict):
+            raise FetchError('invalid_schema')
+        for k, v in data.items():
+            a = want.get(str(k).lower())
+            if a is None:
+                continue
+            try:
+                price = float(v.get('usdPrice')) if v.get('usdPrice') not in (None, '') else None
+            except (TypeError, ValueError):
+                price = None
+            liq = v.get('liquidity')
+            out[a] = (price, float(liq) if isinstance(liq, (int, float)) else None)
+        col.failures[key] = 0
+        col.backoff.pop(key, None)
+    except Exception as e:
+        code = e.code if isinstance(e, FetchError) else type(e).__name__
+        n = col.failures.get(key, 0) + 1
+        col.failures[key] = n
+        col.backoff[key] = time.time() + min(900, max(60 * 2 ** min(n - 1, 4), 0))
+        return out, code
+    return out, None
+
+
+def _plausible(price, liq, base_price, base_liq, span=1000.0):
+    """2026-11-09 守卫：回查价与首见价比值离谱就判不可信，按"查不到"处理。
+
+    背景：DexScreener /tokens/v1 对某些链返回错误池子——
+      bsc 的真实主池在 pancakeswap-infinity-clmm，DexScreener 没收录，
+      只返回一个 $894 的克隆池（真实 $2,309,358，差 2,350 倍）；
+      solana 的 pumpswap 池返回 1h/6h 逐位相同的错价（9.185e-06 → 334.57，差 3,642 万倍）。
+    结果：10,681 个"6h 流动性<$1,000 已死"的 bsc 代币，在扫描侧 100% 都还活着。
+    """
+    if price is None or price <= 0:
+        return False
+    if base_price and (price / base_price >= span or price / base_price <= 1.0 / span):
+        return False
+    if liq is not None and base_liq:
+        if liq / base_liq >= span or liq / base_liq <= 1.0 / span:
+            return False
+    return True
+
+
 def fetch_batch(col, chain, addrs):
     """一批至多 30 地址；返回 {addr: (price, liquidity)}。失败按 Collector 退避。"""
     key = 'dexscreener:tokens:' + chain
@@ -251,10 +311,13 @@ def main():
 
     for chain in sorted(pending):
         addrs = sorted(pending[chain])
-        for i in range(0, len(addrs), BATCH):
-            chunk = addrs[i:i + BATCH]
+        # 2026-11-10：solana 改走 Jupiter（DexScreener 对该链价格不可用），批量上限 100
+        _bsize = JUP_BATCH if chain == 'solana' else BATCH
+        for i in range(0, len(addrs), _bsize):
+            chunk = addrs[i:i + _bsize]
             calls += 1
-            got, err = fetch_batch(col, chain, chunk)
+            got, err = (fetch_batch_jupiter(col, chunk) if chain == 'solana'
+                        else fetch_batch(col, chain, chunk))
             if err and err != 'backoff':
                 errors += 1
                 print('回查失败 %s: %s' % (chain, err))
@@ -271,12 +334,19 @@ def main():
                 if 'first' in slots:
                     rows.append(('first', iso(info['at']), info['price_usd'],
                                  info['liquidity_usd'], iso(info['at'])))
+                _ok = False
                 if addr in got:
                     price, liq = got[addr]
-                    rows.extend((s, ts, price, liq,
-                                 iso(info['at'] + SLOT_SECS[s]))
-                                for s in due_slots)
-                else:
+                    if _plausible(price, liq, info.get('price_usd'), info.get('liquidity_usd')):
+                        _ok = True
+                        rows.extend((s, ts, price, liq,
+                                     iso(info['at'] + SLOT_SECS[s]))
+                                    for s in due_slots)
+                    else:
+                        print('守卫拦下不可信回查价 %s %s: price=%s liq=%s (首见 price=%s liq=%s)'
+                              % (chain, addr, price, liq,
+                                 info.get('price_usd'), info.get('liquidity_usd')))
+                if not _ok:
                     # 查不到价：宽限期内留待下轮；超窗则落 NULL 行，明示缺失
                     for s in due_slots:
                         due = info['at'] + SLOT_SECS[s]
@@ -310,7 +380,7 @@ def main():
     got1 = sum(1 for k in due1 if '1h' in have.get(k, ()) and (k[0], k[1], '1h') not in nulls)
     miss1 = sum(1 for k in due1 if (k[0], k[1], '1h') in nulls)
     cov = (got1 / len(due1) * 100) if due1 else 0.0
-    print('观察名单回查: 锚点 %d  本轮写入 %d 行  DexScreener 调用 %d 次  失败 %d'
+    print('观察名单回查: 锚点 %d  本轮写入 %d 行  外部取价 %d 次(solana=Jupiter,其余=DexScreener)  失败 %d'
           % (anchors, inserted, calls, errors))
     print('1h 覆盖率: %d/%d = %.1f%%（有效价；另有 %d 条超窗查不到价，已记 NULL）'
           % (got1, len(due1), cov, miss1))

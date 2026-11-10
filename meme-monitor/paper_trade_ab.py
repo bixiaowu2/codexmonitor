@@ -7,6 +7,9 @@
   池龄 = min(fetched_at) − created_at（H2 预登记第二节；lead 2026-11-07T1137Z-8c4e 确认修 bug 非规则变更）。
   多源 ≥2（lead 2026-11-07T1129Z 更正，撤回 110644Z-c6ae 的 ≥1 放宽）。首见查找窗口 30h，候选宇宙仍 24h。
 判据：峰值≥10x 笔数 / 均值 / 归零率，跑满 150 笔再判；与 forward_tracks 分开统计。
+2026-11-09 修正案（lead 134958Z-266f 批准，两条）：
+  1) 开仓时刻池龄也必须 <=15 分钟（原条件只约束首见池龄，实际延迟中位 18.6 分钟、P90 19.5 小时）；
+  2) 2026-11-09T13:43Z 之前开的 91 笔改为 mark=ab_h2_v0_stale，不计入 150 判据（入场价是陈价）。
 """
 from __future__ import annotations
 import json, sqlite3, time
@@ -28,9 +31,18 @@ def init(db):
         entry REAL, opened REAL, peak REAL, stop REAL,
         tp1_done INT DEFAULT 0, tp2_done INT DEFAULT 0, closed INT DEFAULT 0,
         realized REAL DEFAULT 0, last_price REAL, last_at REAL, note TEXT,
-        closed_at REAL, liquidity_usd REAL, market_cap REAL, score REAL)''')
+        closed_at REAL, liquidity_usd REAL, market_cap REAL, score REAL,
+        onchain_liq REAL, pair_address TEXT)''')
     db.execute('''CREATE TABLE IF NOT EXISTS fills(
         key TEXT, arm TEXT, at REAL, kind TEXT, price REAL, mult REAL, pnl REAL)''')
+    try:
+        db.execute('ALTER TABLE positions ADD COLUMN onchain_liq REAL')
+    except Exception:
+        pass
+    try:
+        db.execute('ALTER TABLE positions ADD COLUMN pair_address TEXT')
+    except Exception:
+        pass
     db.execute('CREATE INDEX IF NOT EXISTS ab_fills_by_key ON fills(key, at)')
     db.execute('''CREATE TABLE IF NOT EXISTS price_marks(
         key TEXT, arm TEXT, at REAL, price REAL, mult REAL)''')
@@ -109,6 +121,16 @@ def candidates(now):
         if not (AB_LIQ_MIN <= liq <= AB_LIQ_MAX): continue
         age = _age_min(d, ix)
         if age is None or not (AB_AGE_MIN <= age <= AB_AGE_MAX): continue
+        # 2026-11-09 修正案（lead 134958Z-266f 批准）：开仓时刻池龄也必须 <=15 分钟。
+        # 原条件只约束「首见时池龄」，实测首见→开仓延迟中位 18.6 分钟、P90 19.5 小时，
+        # 名义上买 5-15 分钟的池子、实际几小时后才开仓，测的就不是 H2 假设了。
+        _c = d.get('created_at')
+        if _c:
+            try:
+                _c = float(_c); _c = _c / 1000 if _c > 1e10 else _c
+                if (now - _c) / 60 > AB_AGE_MAX: continue
+            except (TypeError, ValueError):
+                continue
         _k = (d.get('chain'), str(d.get('address', '')).lower())
         # 多源门槛恢复 ≥2（lead 2026-11-07T1129Z 更正撤回 c6ae 的 ≥1 放宽）；按标的聚合 source
         if len(src.get(_k, set()) | _sources(d)) < 2: continue
@@ -139,6 +161,54 @@ def price_of(c, matches):
     return None
 
 
+BSC_RPC = 'https://bsc-dataseed.binance.org'
+_WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c'
+_USDT = '0x55d398326f99059ff775485246999027b3197955'
+
+
+def _rpc(to, data, timeout=6):
+    import urllib.request
+    body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'eth_call',
+                       'params': [{'to': to, 'data': data}, 'latest']}).encode()
+    req = urllib.request.Request(BSC_RPC, data=body,
+                                 headers={'User-Agent': 'meme-radar/0.2',
+                                          'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r).get('result')
+
+
+def onchain_liq_usd(pair_address, quote_price_usd=690.0):
+    """链上直读 pool 储备算美元流动性（只对 Uniswap-V2 风格池有效）。
+
+    2026-11-10：扫描侧的 liquidity_usd 是**扫描那一刻**的读数，而币可能在几分钟内被抽干。
+    这里记录开仓时刻链上真实储备，用来事后检验「入场时池子还在不在」。
+    只记录、不作为开仓条件。
+    只依赖报价币（WBNB/USDT）的 18 位小数，不需要代币本身的 decimals。
+    """
+    if not pair_address:
+        return None
+    try:
+        h = _rpc(pair_address, '0x0902f1ac')            # getReserves()
+        if not h or h == '0x' or len(h) < 130:
+            return None
+        x = h[2:]
+        r0 = int(x[0:64], 16)
+        r1 = int(x[64:128], 16)
+        t0 = str(_rpc(pair_address, '0x0dfe1681') or '')[-40:].lower()   # token0()
+        t1 = str(_rpc(pair_address, '0xd21220a7') or '')[-40:].lower()   # token1()
+        if t0 == _WBNB[2:]:
+            return r0 / 1e18 * quote_price_usd * 2
+        if t1 == _WBNB[2:]:
+            return r1 / 1e18 * quote_price_usd * 2
+        if t0 == _USDT[2:]:
+            return r0 / 1e18 * 2
+        if t1 == _USDT[2:]:
+            return r1 / 1e18 * 2
+    except Exception:
+        pass
+    return None
+
+
 def run(matches, now=None, verbose=True):
     now = now or time.time()
     db = sqlite3.connect(str(AB_DB), timeout=15)
@@ -152,15 +222,20 @@ def run(matches, now=None, verbose=True):
             if not prev['closed']: continue
             if prev['closed_at'] is not None and now - prev['closed_at'] < 24 * 3600: continue
             db.execute('DELETE FROM positions WHERE key=?', (key,))
-        entry = float(d.get('price_usd') or 0)
-        if entry <= 0: continue
+        # 2026-11-09 修 bug：原用 signals 里最老一条的 price_usd 当作入场价，
+        # 但开仓时刻中位已在首见后 18.6 分钟（P90 19.5 小时），价差中位 1.15x、最大 19.75x。
+        # 改为与对照臂同口径：开仓时刻的市价。
+        entry = price_of(d, matches)
+        if not entry or entry <= 0: continue
+        _pair = d.get('pair_address')
+        _ocl = onchain_liq_usd(_pair) if str(d.get('chain')) == 'bsc' else None
         db.execute('INSERT INTO positions(key,arm,mark,symbol,chain,address,entry,opened,peak,stop,'
-                   'last_price,last_at,liquidity_usd,market_cap,score)'
-                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                   'last_price,last_at,liquidity_usd,market_cap,score,onchain_liq,pair_address)'
+                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                    (key, ARM, MARK, d.get('symbol'), d.get('chain'), d.get('address'),
                     entry, now, entry, entry * (1 - STOP_PCT), entry, now,
                     d.get('liquidity_usd'), d.get('market_cap'),
-                    (d.get('score_meta') or {}).get('score')))
+                    (d.get('score_meta') or {}).get('score'), _ocl, _pair))
         opened += 1
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
         entry = p['entry'] or 0
@@ -228,10 +303,13 @@ def report():
     db = sqlite3.connect(str(AB_DB), timeout=15)
     db.row_factory = sqlite3.Row
     init(db)
-    rows = db.execute('SELECT * FROM positions').fetchall()
+    rows = db.execute('SELECT * FROM positions WHERE mark=?', (MARK,)).fetchall()
+    stale = db.execute('SELECT COUNT(*) FROM positions WHERE mark<>?', (MARK,)).fetchone()[0]
     closed = [r for r in rows if r['closed']]
     print('=' * 72)
     print(f'A/B 实验臂 H2({MARK}): 共 {len(rows)} 笔 | 已平仓 {len(closed)} | 持仓中 {len(rows)-len(closed)}')
+    if stale:
+        print(f'  （另有 {stale} 笔 ab_h2_v0_stale 陈价遗留数据，不计入 150 判据，仅作参考）')
     if closed:
         v = sorted(r['realized'] for r in closed)
         ge10 = sum(1 for r in closed if r['entry'] and (r['peak'] / r['entry']) >= 10)
