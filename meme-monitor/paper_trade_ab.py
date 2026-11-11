@@ -140,8 +140,13 @@ def candidates(now):
     return out
 
 
-def price_of(c, matches):
+def price_of(c, matches, jup=None):
     """与对照臂同口径取价：优先最新扫描 price_usd，掉出候选走 DexScreener 兜底。"""
+    if c.get('chain') == 'solana' and jup is not None:
+        a = str(c.get('address', ''))
+        v = jup.get(a)
+        if v:
+            return v
     row = matches.get((c.get('chain'), str(c.get('address', '')).lower()))
     if row and row.get('price_usd'):
         try:
@@ -175,6 +180,44 @@ def _rpc(to, data, timeout=6):
                                           'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r).get('result')
+
+
+JUP_API = 'https://lite-api.jup.ag'
+
+
+def jupiter_prices(addrs, timeout=12):
+    """solana 批量取价（Jupiter /price/v3，一次最多 50 个）。
+
+    2026-11-11：A/B 臂原来对 solana 也走 DexScreener /tokens/v1，而那个端点对该链
+    会给错价（实测某币 9.185e-06 → 334.57，1h/6h 逐位相同，3600 万倍伪影）。
+    已在 watch_observe 切 Jupiter，这里同步。
+    返回 {address: price|None}；None 表示该币在 Jupiter 眼里已无价（死币）。
+    """
+    import urllib.request
+    out = {}
+    for i in range(0, len(addrs), 50):
+        chunk = addrs[i:i + 50]
+        try:
+            url = '%s/price/v3?ids=%s' % (JUP_API, ','.join(chunk))
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'meme-radar/0.2', 'Accept': 'application/json'})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.load(r)
+            if not isinstance(data, dict):
+                continue
+            want = dict((a.lower(), a) for a in chunk)
+            for k, v in data.items():
+                a = want.get(str(k).lower())
+                if a is None:
+                    continue
+                p = v.get('usdPrice')
+                try:
+                    out[a] = float(p) if p not in (None, '') else None
+                except (TypeError, ValueError):
+                    out[a] = None
+        except Exception:
+            pass
+    return out
 
 
 def onchain_liq_usd(pair_address, quote_price_usd=690.0):
@@ -215,7 +258,19 @@ def run(matches, now=None, verbose=True):
     db.row_factory = sqlite3.Row
     init(db)
     opened = closed = 0
-    for d in candidates(now):
+    # 2026-11-11：solana 的持仓价统一走 Jupiter（DexScreener 对该链不可用）
+    _cands = candidates(now)
+    _jup = {}
+    try:
+        _sol = [r['address'] for r in db.execute(
+            "SELECT address FROM positions WHERE closed=0 AND chain='solana'")]
+        _sol += [d.get('address') for d in _cands if str(d.get('chain')) == 'solana']
+        _sol = [a for a in dict.fromkeys(_sol) if a]
+        if _sol:
+            _jup = jupiter_prices(_sol)
+    except Exception:
+        _jup = {}
+    for d in _cands:
         key = f"H2|{d.get('chain')}:{str(d.get('address', '')).lower()}"
         prev = db.execute('SELECT closed, closed_at FROM positions WHERE key=?', (key,)).fetchone()
         if prev is not None:
@@ -225,7 +280,7 @@ def run(matches, now=None, verbose=True):
         # 2026-11-09 修 bug：原用 signals 里最老一条的 price_usd 当作入场价，
         # 但开仓时刻中位已在首见后 18.6 分钟（P90 19.5 小时），价差中位 1.15x、最大 19.75x。
         # 改为与对照臂同口径：开仓时刻的市价。
-        entry = price_of(d, matches)
+        entry = price_of(d, matches, _jup)
         if not entry or entry <= 0: continue
         _pair = d.get('pair_address')
         _ocl = onchain_liq_usd(_pair) if str(d.get('chain')) == 'bsc' else None
@@ -239,7 +294,24 @@ def run(matches, now=None, verbose=True):
         opened += 1
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
         entry = p['entry'] or 0
-        price = price_of({'chain': p['chain'], 'address': p['address']}, matches)
+        # 2026-11-11：Jupiter 认识这个币但没有 usdPrice = 流动性≈0，已死透。
+        # 原来会一直挂到 7 天超时才平，且用死前的 last_price 结算 —— 低估亏损。
+        # 现在立即按剩余仓位全损平仓。
+        # 宽限 30 分钟：刚开仓的新币 Jupiter 可能还没索引到，不能立刻判死
+        if (str(p['chain']) == 'solana' and p['address'] in _jup
+                and _jup[p['address']] is None
+                and now - (p['opened'] or now) >= 1800):
+            left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
+            if left > 0:
+                db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?,?)',
+                           (p['key'], ARM, now, 'dead', 0.0, 0.0, -left))
+                db.execute('UPDATE positions SET realized=realized+? WHERE key=?',
+                           (-left, p['key']))
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
+                       (now, '归零(无价)', p['key']))
+            closed += 1
+            continue
+        price = price_of({'chain': p['chain'], 'address': p['address']}, matches, _jup)
         if not price:
             if entry > 0 and now - p['opened'] >= MAX_HOLD_DAYS * 86400:
                 last = p['last_price'] or entry

@@ -303,6 +303,7 @@ def main():
     col = Collector(timeout=10, spacing=2.0)
     load_backoff(col)
     inserted = calls = errors = 0
+    _blk = {}
     peak = {}
     for chain, addr, p in db.execute(
             'SELECT chain, address, max(coalesce(peak_price_usd, price_usd)) '
@@ -343,9 +344,9 @@ def main():
                                      iso(info['at'] + SLOT_SECS[s]))
                                     for s in due_slots)
                     else:
-                        print('守卫拦下不可信回查价 %s %s: price=%s liq=%s (首见 price=%s liq=%s)'
-                              % (chain, addr, price, liq,
-                                 info.get('price_usd'), info.get('liquidity_usd')))
+                        # 2026-11-11：原来逐行打印，实测 3 小时打了 19,917 行，会撑爆 journal。
+                        # 改为按链计数，每轮打一行汇总。
+                        _blk[chain] = _blk.get(chain, 0) + 1
                 if not _ok:
                     # 查不到价：宽限期内留待下轮；超窗则落 NULL 行，明示缺失
                     for s in due_slots:
@@ -380,8 +381,12 @@ def main():
     got1 = sum(1 for k in due1 if '1h' in have.get(k, ()) and (k[0], k[1], '1h') not in nulls)
     miss1 = sum(1 for k in due1 if (k[0], k[1], '1h') in nulls)
     cov = (got1 / len(due1) * 100) if due1 else 0.0
+    _blk_total = sum(_blk.values())
     print('观察名单回查: 锚点 %d  本轮写入 %d 行  外部取价 %d 次(solana=Jupiter,其余=DexScreener)  失败 %d'
           % (anchors, inserted, calls, errors))
+    if _blk_total:
+        print('  守卫拦下 %d 行（%s）——判为不可信回查价，已按查不到价处理'
+              % (_blk_total, ', '.join('%s=%d' % (k, v) for k, v in sorted(_blk.items()))))
     print('1h 覆盖率: %d/%d = %.1f%%（有效价；另有 %d 条超窗查不到价，已记 NULL）'
           % (got1, len(due1), cov, miss1))
 
