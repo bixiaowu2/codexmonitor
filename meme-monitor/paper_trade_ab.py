@@ -20,6 +20,9 @@ AB_DB = DATA / 'paper_trade_ab.sqlite'
 RADAR_DB = DATA / 'meme-radar.sqlite'
 ARM, MARK = 'H2', 'ab_h2_v1'
 STOP_PCT, TP1, TP2, TRAIL_PCT, MAX_HOLD_DAYS = 0.50, 2.0, 5.0, 0.30, 7
+# 2026-11-13 平行臂（用户批准 A/B 对比）：B 臂加「-30% 全部出掉」规则
+EARLY_STOP = 0.70   # 首次跌破 0.70x（-30%）即全部出掉
+MARK_B = 'ab_h2_v1_early30'
 AB_LIQ_MIN, AB_LIQ_MAX, AB_AGE_MIN, AB_AGE_MAX = 10000, 25000, 5, 15
 LOOKBACK_H = 24
 FIRST_SEEN_H = 30
@@ -270,29 +273,38 @@ def run(matches, now=None, verbose=True):
             _jup = jupiter_prices(_sol)
     except Exception:
         _jup = {}
-    for d in _cands:
-        key = f"H2|{d.get('chain')}:{str(d.get('address', '')).lower()}"
-        prev = db.execute('SELECT closed, closed_at FROM positions WHERE key=?', (key,)).fetchone()
-        if prev is not None:
-            if not prev['closed']: continue
-            if prev['closed_at'] is not None and now - prev['closed_at'] < 24 * 3600: continue
-            db.execute('DELETE FROM positions WHERE key=?', (key,))
-        # 2026-11-09 修 bug：原用 signals 里最老一条的 price_usd 当作入场价，
-        # 但开仓时刻中位已在首见后 18.6 分钟（P90 19.5 小时），价差中位 1.15x、最大 19.75x。
-        # 改为与对照臂同口径：开仓时刻的市价。
-        entry = price_of(d, matches, _jup)
-        if not entry or entry <= 0: continue
-        _pair = d.get('pair_address')
-        _ocl = onchain_liq_usd(_pair) if str(d.get('chain')) == 'bsc' else None
-        db.execute('INSERT INTO positions(key,arm,mark,symbol,chain,address,entry,opened,peak,stop,'
-                   'last_price,last_at,liquidity_usd,market_cap,score,onchain_liq,pair_address)'
-                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                   (key, ARM, MARK, d.get('symbol'), d.get('chain'), d.get('address'),
-                    entry, now, entry, entry * (1 - STOP_PCT), entry, now,
-                    d.get('liquidity_usd'), d.get('market_cap'),
-                    (d.get('score_meta') or {}).get('score'), _ocl, _pair))
-        opened += 1
+    def open_positions(mark):
+        opened_n = 0
+        for d in _cands:
+            key = f"H2|{mark}|{d.get('chain')}:{str(d.get('address', '')).lower()}"
+            prev = db.execute('SELECT closed, closed_at FROM positions WHERE key=?', (key,)).fetchone()
+            if prev is not None:
+                if not prev['closed']:
+                    continue
+                if prev['closed_at'] is not None and now - prev['closed_at'] < 24 * 3600:
+                    continue
+                db.execute('DELETE FROM positions WHERE key=?', (key,))
+            # 2026-11-09 修 bug：原用 signals 里最老一条的 price_usd 当作入场价，
+            # 改为与对照臂同口径：开仓时刻的市价。
+            entry = price_of(d, matches, _jup)
+            if not entry or entry <= 0:
+                continue
+            _pair = d.get('pair_address')
+            _ocl = onchain_liq_usd(_pair) if str(d.get('chain')) == 'bsc' else None
+            db.execute('INSERT INTO positions(key,arm,mark,symbol,chain,address,entry,opened,peak,stop,'
+                       'last_price,last_at,liquidity_usd,market_cap,score,onchain_liq,pair_address)'
+                       ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (key, ARM, mark, d.get('symbol'), d.get('chain'), d.get('address'),
+                        entry, now, entry, entry * (1 - STOP_PCT), entry, now,
+                        d.get('liquidity_usd'), d.get('market_cap'),
+                        (d.get('score_meta') or {}).get('score'), _ocl, _pair))
+            opened_n += 1
+        return opened_n
+
+    opened = open_positions(MARK)
+    opened_b = open_positions(MARK_B)
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
+        is_b = (p['mark'] == MARK_B)
         entry = p['entry'] or 0
         # 2026-11-11：Jupiter 认识这个币但没有 usdPrice = 流动性≈0，已死透。
         # 原来会一直挂到 7 天超时才平，且用死前的 last_price 结算 —— 低估亏损。
@@ -332,6 +344,14 @@ def run(matches, now=None, verbose=True):
                    (peak, price, now, p['key']))
         mult = price / entry
         db.execute('INSERT INTO price_marks VALUES(?,?,?,?,?)', (p['key'], ARM, now, price, mult))
+        # 2026-11-13 B 臂专属：首次跌破 -30% 即全部出掉（用户批准的 A/B 对比）
+        if is_b and price <= entry * EARLY_STOP:
+            left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
+            if left > 0:
+                close_part('early30', left, price)
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
+                       (now, '预警-30%出场', p['key']))
+            closed += 1; continue
 
         def close_part(kind, frac, px):
             m = px / entry; pnl = frac * (m - 1)
@@ -389,6 +409,13 @@ def report():
         print(f'  均值 {sum(v)/len(v)*100:+.1f}% | 中位 {v[len(v)//2]*100:+.1f}%'
               f' | 峰值≥10x {ge10} 笔 | 归零(≤-99%) {zero} 笔')
     print(f'  距判据 150 笔还差 {max(0, 150-len(closed))} 笔已平仓')
+    rows_b = db.execute('SELECT * FROM positions WHERE mark=?', (MARK_B,)).fetchall()
+    cl_b=[r['realized'] for r in rows_b if r['closed'] and r['realized'] is not None]
+    print(f'  B 臂({MARK_B}): 共 {len(rows_b)} 笔 | 已平 {len(cl_b)}')
+    if cl_b:
+        vv=sorted(cl_b)
+        print(f'    均值 {sum(cl_b)/len(cl_b)*100:+.1f}% | 中位 {vv[len(cl_b)//2]*100:+.1f}%'
+              f' | 归零 {sum(1 for x in cl_b if x<=-0.99)} 笔')
     db.close()
 
 
