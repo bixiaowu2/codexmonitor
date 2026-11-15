@@ -23,6 +23,11 @@ STOP_PCT, TP1, TP2, TRAIL_PCT, MAX_HOLD_DAYS = 0.50, 2.0, 5.0, 0.30, 7
 # 2026-11-13 平行臂（用户批准 A/B 对比）：B 臂加「-30% 全部出掉」规则
 EARLY_STOP = 0.70   # 首次跌破 0.70x（-30%）即全部出掉
 MARK_B = 'ab_h2_v1_early30'
+# 2026-11-14 C 臂：30 分钟时间出场。反事实扫描（对照臂 S/A 159 笔）：
+# 持仓 30 分钟时价格中位仍在 1.00x，之后才衰减；30 分出 vs 实际出场 +20~25pp/受影响笔，
+# 剔除 robinhood 冻结价后仍 +22pp。与 A/B 同一批候选、同一入场价，只差出场规则。
+MARK_C = 'ab_h2_v1_time30'
+TIME_EXIT_SEC = 1800
 AB_LIQ_MIN, AB_LIQ_MAX, AB_AGE_MIN, AB_AGE_MAX = 10000, 25000, 5, 15
 LOOKBACK_H = 24
 FIRST_SEEN_H = 30
@@ -105,7 +110,19 @@ def _sources(d):
 
 
 def candidates(now):
-    out = []
+    """2026-11-14 方案 A′（修正版）：按「开仓时点池龄 5–15 分」选候选。
+
+    为什么改（实测，不是推测）：
+      · 原预登记用「首见池龄 5–15 分」，那是旧管道下买不到新池时的代理指标。
+      · 11-09 修正案又加了「开仓时池龄 ≤15 分」，理由是「首见→开仓延迟中位 18.6 分钟」。
+      · 11-14 复核：signals 插入延迟中位 0.2 分钟、band 内首见池龄中位 2.3 分钟 —— 管道不慢。
+        真正把候选卡死的是两条年龄门槛的交集：24h 内 2,670 条 band 行里只有 1 条同时满足，
+        实测 0.97 笔/天，A/B 臂几乎开不出仓。
+      · 现改为直接按池子真实年龄判：开仓时点 5 ≤ (now − created_at)/60 ≤ 15。
+        24h 实测产量：band 内、15 分钟内攒到 ≥2 个来源的独立标的 31 个/天。
+    多源 ≥2 与 dex 门槛不变（lead 2026-11-07T1129Z）；liq $10–25K 不变。
+    """
+    out = {}
     try:
         db = sqlite3.connect(f'file:{RADAR_DB}?mode=ro', uri=True, timeout=15)
         rows = db.execute('SELECT created, payload FROM signals WHERE created >= ?',
@@ -114,7 +131,7 @@ def candidates(now):
         db.close()
     except Exception as e:
         print(f'AB臂: 读 signals 失败 {e}')
-        return out
+        return []
     for _c, payload in rows:
         try:
             d = json.loads(payload)
@@ -122,25 +139,28 @@ def candidates(now):
             continue
         liq = d.get('liquidity_usd') or 0
         if not (AB_LIQ_MIN <= liq <= AB_LIQ_MAX): continue
-        age = _age_min(d, ix)
-        if age is None or not (AB_AGE_MIN <= age <= AB_AGE_MAX): continue
-        # 2026-11-09 修正案（lead 134958Z-266f 批准）：开仓时刻池龄也必须 <=15 分钟。
-        # 原条件只约束「首见时池龄」，实测首见→开仓延迟中位 18.6 分钟、P90 19.5 小时，
-        # 名义上买 5-15 分钟的池子、实际几小时后才开仓，测的就不是 H2 假设了。
-        _c = d.get('created_at')
-        if _c:
-            try:
-                _c = float(_c); _c = _c / 1000 if _c > 1e10 else _c
-                if (now - _c) / 60 > AB_AGE_MAX: continue
-            except (TypeError, ValueError):
-                continue
+        c = d.get('created_at')
+        if not c: continue
+        try:
+            c = float(c)
+            if c > 1e14: c /= 1e6          # 微秒（少数源给 16 位）
+            elif c > 1e10: c /= 1000       # 毫秒
+        except (TypeError, ValueError):
+            continue
+        age_min = (now - c) / 60
+        if not (AB_AGE_MIN <= age_min <= AB_AGE_MAX): continue
         _k = (d.get('chain'), str(d.get('address', '')).lower())
-        # 多源门槛恢复 ≥2（lead 2026-11-07T1129Z 更正撤回 c6ae 的 ≥1 放宽）；按标的聚合 source
         if len(src.get(_k, set()) | _sources(d)) < 2: continue
         if not d.get('dex') and _k not in dex: continue
         if not d.get('address') or not (d.get('price_usd') or 0): continue
-        out.append(d)
-    return out
+        d = dict(d)
+        d['age_minutes'] = round(age_min, 1)
+        # 同一标的 24h 内可能有多行（不同源/不同时刻）：只留 fetched_at 最新的一行，
+        # 否则开仓会拿到最老那一行的陈价（2026-11-14 修）。
+        prev = out.get(_k)
+        if prev is None or (d.get('fetched_at') or 0) > (prev.get('fetched_at') or 0):
+            out[_k] = d
+    return list(out.values())
 
 
 def price_of(c, matches, jup=None):
@@ -150,6 +170,14 @@ def price_of(c, matches, jup=None):
         v = jup.get(a)
         if v:
             return v
+    # 2026-11-14：候选行自带的 price_usd 是扫描时点的价（插入延迟中位 0.2 分钟），
+    # 比 matches.json（每小时覆盖写、只有 S/A）新；band 候选是 B 级，本来就查不到 matches。
+    if c.get('price_usd') and c.get('fetched_at'):
+        try:
+            if (time.time() - float(c['fetched_at'])) / 60 <= 20:
+                return float(c['price_usd'])
+        except (TypeError, ValueError):
+            pass
     row = matches.get((c.get('chain'), str(c.get('address', '')).lower()))
     if row and row.get('price_usd'):
         try:
@@ -303,8 +331,10 @@ def run(matches, now=None, verbose=True):
 
     opened = open_positions(MARK)
     opened_b = open_positions(MARK_B)
+    opened_c = open_positions(MARK_C)
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
         is_b = (p['mark'] == MARK_B)
+        is_c = (p['mark'] == MARK_C)
         entry = p['entry'] or 0
         # 2026-11-11：Jupiter 认识这个币但没有 usdPrice = 流动性≈0，已死透。
         # 原来会一直挂到 7 天超时才平，且用死前的 last_price 结算 —— 低估亏损。
@@ -344,6 +374,15 @@ def run(matches, now=None, verbose=True):
                    (peak, price, now, p['key']))
         mult = price / entry
         db.execute('INSERT INTO price_marks VALUES(?,?,?,?,?)', (p['key'], ARM, now, price, mult))
+        def close_part(kind, frac, px):
+            m = px / entry; pnl = frac * (m - 1)
+            db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?,?)',
+                       (p['key'], ARM, now, kind, px, m, pnl))
+            db.execute('UPDATE positions SET realized=realized+? WHERE key=?', (pnl, p['key']))
+
+        # 2026-11-14 修 bug：close_part 原来定义在 B 臂规则**之后**，
+        # B 臂第一次触发就会 UnboundLocalError（run() 整体抛错、整轮不处理）。
+        # 定义已提到所有调用之前。
         # 2026-11-13 B 臂专属：首次跌破 -30% 即全部出掉（用户批准的 A/B 对比）
         if is_b and price <= entry * EARLY_STOP:
             left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
@@ -353,11 +392,14 @@ def run(matches, now=None, verbose=True):
                        (now, '预警-30%出场', p['key']))
             closed += 1; continue
 
-        def close_part(kind, frac, px):
-            m = px / entry; pnl = frac * (m - 1)
-            db.execute('INSERT INTO fills VALUES(?,?,?,?,?,?,?)',
-                       (p['key'], ARM, now, kind, px, m, pnl))
-            db.execute('UPDATE positions SET realized=realized+? WHERE key=?', (pnl, p['key']))
+        # 2026-11-14 C 臂：持仓满 30 分钟，在第一个 ≥30 分钟的轮次按现价全出
+        if is_c and now - (p['opened'] or now) >= TIME_EXIT_SEC:
+            left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
+            if left > 0:
+                close_part('time30', left, price)
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
+                       (now, '时间出场30分', p['key']))
+            closed += 1; continue
 
         if price <= p['stop']:
             close_part('stop', 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0, price)
@@ -387,6 +429,7 @@ def run(matches, now=None, verbose=True):
     if verbose:
         tot = db.execute('SELECT COUNT(*) FROM positions').fetchone()[0]
         print(f'实验臂 H2({MARK}): 新开仓 {opened} | 平仓 {closed} | 台账共 {tot} 笔')
+        print(f'  B 臂新开仓 {opened_b} | C 臂新开仓 {opened_c}')
     db.close()
     return opened, closed
 
@@ -396,12 +439,15 @@ def report():
     db.row_factory = sqlite3.Row
     init(db)
     rows = db.execute('SELECT * FROM positions WHERE mark=?', (MARK,)).fetchall()
-    stale = db.execute('SELECT COUNT(*) FROM positions WHERE mark<>?', (MARK,)).fetchone()[0]
+    # 只数「陈价/旧口径」遗留；B/C 平行臂不算 stale（2026-11-14 修）
+    stale = db.execute(
+        "SELECT COUNT(*) FROM positions WHERE mark<>? AND (mark LIKE 'ab_h2_v0%' OR mark LIKE '%_oldpop')",
+        (MARK,)).fetchone()[0]
     closed = [r for r in rows if r['closed']]
     print('=' * 72)
     print(f'A/B 实验臂 H2({MARK}): 共 {len(rows)} 笔 | 已平仓 {len(closed)} | 持仓中 {len(rows)-len(closed)}')
     if stale:
-        print(f'  （另有 {stale} 笔 ab_h2_v0_stale 陈价遗留数据，不计入 150 判据，仅作参考）')
+        print(f'  （另有 {stale} 笔陈价/旧口径遗留，不计入 150 判据，仅作参考）')
     if closed:
         v = sorted(r['realized'] for r in closed)
         ge10 = sum(1 for r in closed if r['entry'] and (r['peak'] / r['entry']) >= 10)
@@ -412,10 +458,14 @@ def report():
     rows_b = db.execute('SELECT * FROM positions WHERE mark=?', (MARK_B,)).fetchall()
     cl_b=[r['realized'] for r in rows_b if r['closed'] and r['realized'] is not None]
     print(f'  B 臂({MARK_B}): 共 {len(rows_b)} 笔 | 已平 {len(cl_b)}')
-    if cl_b:
-        vv=sorted(cl_b)
-        print(f'    均值 {sum(cl_b)/len(cl_b)*100:+.1f}% | 中位 {vv[len(cl_b)//2]*100:+.1f}%'
-              f' | 归零 {sum(1 for x in cl_b if x<=-0.99)} 笔')
+    rows_c = db.execute('SELECT * FROM positions WHERE mark=?', (MARK_C,)).fetchall()
+    cl_c = [r['realized'] for r in rows_c if r['closed'] and r['realized'] is not None]
+    print(f'  C 臂({MARK_C}): 共 {len(rows_c)} 笔 | 已平 {len(cl_c)}')
+    for _lbl, _cl in (('B', cl_b), ('C', cl_c)):
+        if _cl:
+            vv = sorted(_cl)
+            print(f'    {_lbl} 均值 {sum(_cl)/len(_cl)*100:+.1f}% | 中位 {vv[len(_cl)//2]*100:+.1f}%'
+                  f' | 归零 {sum(1 for x in _cl if x<=-0.99)} 笔')
     db.close()
 
 
