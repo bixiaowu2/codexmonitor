@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent ID 每日签到 · 雷达数据门禁（测试版）</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Agent ID 每日签到</h1>
+      <p class="sub">持有 Agent ID 地址，签到后展示完整数据面板</p>
+      <p class="notice">测试版：合约地址待部署后注入；本页仅浏览器注入钱包连接，不使用网页扫码登录。签到后展示完整数据面板，不宣称加密解锁。数据仅供研究参考，非投资建议。</p>
+    </header>
+
+    <section class="card" id="gate">
+      <button id="connect" type="button">连接钱包</button>
+      <button id="checkin" type="button" disabled>签到解锁</button>
+      <div id="status" role="status">未连接钱包</div>
+    </section>
+
+    <section id="panel" class="hidden">
+      <h2>当日雷达数据 <span id="data-date"></span></h2>
+      <p id="generated-at" class="muted"></p>
+      <div id="sections"></div>
+    </section>
+    <footer>非投资建议 · 动态数据可能滞后 · 签到状态以链上为准</footer>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

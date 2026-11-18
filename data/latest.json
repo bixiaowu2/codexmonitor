@@ -1,0 +1,539 @@
+{
+  "date": "2026-11-18",
+  "generated_at": "2026-11-18T12:00:00Z",
+  "sections": {
+    "stocks": {
+      "source": "/var/lib/stock-radar/stock_matches.json",
+      "count": 28,
+      "items": [
+        {
+          "symbol": "601138.SS",
+          "name": "工业富联",
+          "conc": 80.238795173212,
+          "tier": "S"
+        },
+        {
+          "symbol": "001388.SZ",
+          "name": "信通电子",
+          "conc": 65.103996,
+          "tier": "S"
+        },
+        {
+          "symbol": "1478.HK",
+          "name": "丘钛科技",
+          "conc": 63.592999999999996,
+          "tier": "S"
+        },
+        {
+          "symbol": "9923.HK",
+          "name": "移卡",
+          "conc": 55.199003000000005,
+          "tier": "S"
+        },
+        {
+          "symbol": "0909.HK",
+          "name": "明源云",
+          "conc": 50.451,
+          "tier": "S"
+        },
+        {
+          "symbol": "1347.HK",
+          "name": "华虹半导体",
+          "conc": 49.783,
+          "tier": "S"
+        },
+        {
+          "symbol": "2121.HK",
+          "name": "创新奇智",
+          "conc": 49.585,
+          "tier": "S"
+        },
+        {
+          "symbol": "300789.SZ",
+          "name": "唐源电气",
+          "conc": 48.406067167616,
+          "tier": "S"
+        },
+        {
+          "symbol": "688787.SS",
+          "name": "海天瑞声",
+          "conc": 47.62364239941,
+          "tier": "S"
+        },
+        {
+          "symbol": "300654.SZ",
+          "name": "世纪天鸿",
+          "conc": 47.368943538593,
+          "tier": "S"
+        },
+        {
+          "symbol": "2431.HK",
+          "name": "佑驾创新",
+          "conc": 44.615,
+          "tier": "S"
+        },
+        {
+          "symbol": "688135.SS",
+          "name": "利扬芯片",
+          "conc": 42.555959753009,
+          "tier": "S"
+        },
+        {
+          "symbol": "2158.HK",
+          "name": "医渡科技",
+          "conc": 40.925996999999995,
+          "tier": "S"
+        },
+        {
+          "symbol": "1274.HK",
+          "name": "知行汽车科技",
+          "conc": 40.873,
+          "tier": "S"
+        },
+        {
+          "symbol": "301172.SZ",
+          "name": "君逸数码",
+          "conc": 40.668040744049996,
+          "tier": "S"
+        },
+        {
+          "symbol": "300781.SZ",
+          "name": "因赛集团",
+          "conc": 39.962148685668,
+          "tier": "S"
+        },
+        {
+          "symbol": "688256.SS",
+          "name": "寒武纪",
+          "conc": 39.806754784968,
+          "tier": "S"
+        },
+        {
+          "symbol": "300042.SZ",
+          "name": "朗科科技",
+          "conc": 39.352297405189,
+          "tier": "S"
+        },
+        {
+          "symbol": "301503.SZ",
+          "name": "智迪科技",
+          "conc": 39.270628078818,
+          "tier": "S"
+        },
+        {
+          "symbol": "2438.HK",
+          "name": "出门问问",
+          "conc": 37.562,
+          "tier": "S"
+        },
+        {
+          "symbol": "002708.SZ",
+          "name": "光洋股份",
+          "conc": 36.555210833623,
+          "tier": "S"
+        },
+        {
+          "symbol": "2495.HK",
+          "name": "声通科技",
+          "conc": 35.243,
+          "tier": "S"
+        },
+        {
+          "symbol": "300795.SZ",
+          "name": "米奥会展",
+          "conc": 34.953101848967,
+          "tier": "S"
+        },
+        {
+          "symbol": "300608.SZ",
+          "name": "思特奇",
+          "conc": 34.94494843331,
+          "tier": "S"
+        },
+        {
+          "symbol": "000818.SZ",
+          "name": "航锦科技",
+          "conc": 33.249177477393005,
+          "tier": "S"
+        },
+        {
+          "symbol": "603322.SS",
+          "name": "超讯科技",
+          "conc": 32.373534011061,
+          "tier": "S"
+        },
+        {
+          "symbol": "300872.SZ",
+          "name": "天阳科技",
+          "conc": 31.598265454447,
+          "tier": "S"
+        },
+        {
+          "symbol": "300571.SZ",
+          "name": "平治信息",
+          "conc": 31.591674614522,
+          "tier": "S"
+        }
+      ]
+    },
+    "meme": {
+      "source": "/var/lib/radar-backup-staging/db/meme-radar.sqlite (mode=ro, backup staging)",
+      "data_date": "2026-11-18",
+      "stale": false,
+      "count": 20,
+      "items": [
+        {
+          "chain": "bsc",
+          "address": "0x6a3efec76b69ccffa108a7cbd4a4a85d2b547777",
+          "symbol": "CI",
+          "scanned_at": 1794935130.815855,
+          "scanned_date": "2026-11-17",
+          "score": 75.6,
+          "tier": "hot",
+          "liquidity": 124277.71,
+          "volume_1h": 385325.38,
+          "change_1h": 3680.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "bsc",
+          "address": "0x6a3efec76b69ccffa108a7cbd4a4a85d2b547777",
+          "symbol": "CI",
+          "scanned_at": 1794933969.3055975,
+          "scanned_date": "2026-11-17",
+          "score": 73.8,
+          "tier": "hot",
+          "liquidity": 108132.05,
+          "volume_1h": 249495.33,
+          "change_1h": 2776.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "bsc",
+          "address": "0x6a3efec76b69ccffa108a7cbd4a4a85d2b547777",
+          "symbol": "CI",
+          "scanned_at": 1794935797.241666,
+          "scanned_date": "2026-11-17",
+          "score": 73.6,
+          "tier": "hot",
+          "liquidity": 108406.57,
+          "volume_1h": 476434.93,
+          "change_1h": 650.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "6wiaCq8oQiupFfeDU4ouAuYnCKXCch581HAmpvrxpump",
+          "symbol": "GTAVI",
+          "scanned_at": 1794961809.3451414,
+          "scanned_date": "2026-11-18",
+          "score": 70.7,
+          "tier": "hot",
+          "liquidity": 73460.38,
+          "volume_1h": 444965.12,
+          "change_1h": 2368.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "9hcGkiESMMLXJjMv9ktJjDDQpt5SyKJDZ5CKAt2Qpump",
+          "symbol": "Rex",
+          "scanned_at": 1794931032.1971788,
+          "scanned_date": "2026-11-17",
+          "score": 70.2,
+          "tier": "hot",
+          "liquidity": 55462.76,
+          "volume_1h": 282647.65,
+          "change_1h": 1418.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "BSsmLA6UN8fzJ8qUkV4KwC5LxR7ab3TaUtcwvAyJpump",
+          "symbol": "JALU",
+          "scanned_at": 1794944806.9222379,
+          "scanned_date": "2026-11-17",
+          "score": 69.7,
+          "tier": "watch",
+          "liquidity": 61484.0,
+          "volume_1h": 605054.6,
+          "change_1h": 1440.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "bsc",
+          "address": "0x6a3efec76b69ccffa108a7cbd4a4a85d2b547777",
+          "symbol": "CI",
+          "scanned_at": 1794936703.9795802,
+          "scanned_date": "2026-11-17",
+          "score": 69.6,
+          "tier": "watch",
+          "liquidity": 124586.42,
+          "volume_1h": 471555.53,
+          "change_1h": 41.18,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "9UvLfZuL4p7P2MPJ7LosboQnhjeukX2GnC78NVbmpump",
+          "symbol": "LUCIASS",
+          "scanned_at": 1794949229.5428295,
+          "scanned_date": "2026-11-17",
+          "score": 69.6,
+          "tier": "watch",
+          "liquidity": 25927.72,
+          "volume_1h": 122104.07,
+          "change_1h": 286.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "3HPU5agEYMrecTnrunbDWAKkPy5Z4CMyt4GnTDe9pump",
+          "symbol": "LUCIA",
+          "scanned_at": 1794957378.6838717,
+          "scanned_date": "2026-11-17",
+          "score": 69.5,
+          "tier": "watch",
+          "liquidity": 28926.66,
+          "volume_1h": 199438.18,
+          "change_1h": 366.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "BSsmLA6UN8fzJ8qUkV4KwC5LxR7ab3TaUtcwvAyJpump",
+          "symbol": "JALU",
+          "scanned_at": 1794943838.3220992,
+          "scanned_date": "2026-11-17",
+          "score": 69.4,
+          "tier": "watch",
+          "liquidity": 50145.14,
+          "volume_1h": 541597.84,
+          "change_1h": 940.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "BSsmLA6UN8fzJ8qUkV4KwC5LxR7ab3TaUtcwvAyJpump",
+          "symbol": "JALU",
+          "scanned_at": 1794943171.9585454,
+          "scanned_date": "2026-11-17",
+          "score": 68.8,
+          "tier": "watch",
+          "liquidity": 42888.43,
+          "volume_1h": 508537.34,
+          "change_1h": 669.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "6wiaCq8oQiupFfeDU4ouAuYnCKXCch581HAmpvrxpump",
+          "symbol": "GTAVI",
+          "scanned_at": 1794961324.4669223,
+          "scanned_date": "2026-11-18",
+          "score": 68.7,
+          "tier": "watch",
+          "liquidity": 57561.23,
+          "volume_1h": 264505.85,
+          "change_1h": 1462.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "9rbKkz2BDQBVgZmrHY6d7PTq2ge91gkpEyE4y9PPpump",
+          "symbol": "Leonida",
+          "scanned_at": 1794967695.3689575,
+          "scanned_date": "2026-11-18",
+          "score": 68.3,
+          "tier": "watch",
+          "liquidity": 57410.95,
+          "volume_1h": 768930.02,
+          "change_1h": 1667.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "4z7LXmQewWk5LLDTbTZEeGpeUhTFR1dHGvg7ckhbpump",
+          "symbol": "CSI",
+          "scanned_at": 1794944806.9222379,
+          "scanned_date": "2026-11-17",
+          "score": 68.2,
+          "tier": "watch",
+          "liquidity": 26451.26,
+          "volume_1h": 116305.32,
+          "change_1h": 303.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "3HPU5agEYMrecTnrunbDWAKkPy5Z4CMyt4GnTDe9pump",
+          "symbol": "LUCIA",
+          "scanned_at": 1794956448.1802433,
+          "scanned_date": "2026-11-17",
+          "score": 68.2,
+          "tier": "watch",
+          "liquidity": 25256.86,
+          "volume_1h": 123052.83,
+          "change_1h": 271.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "ANNzAQ2ADnquKGoKMsMt3ByLASo93pFnA23D8KW7pump",
+          "symbol": "JVOLT",
+          "scanned_at": 1794924914.2467358,
+          "scanned_date": "2026-11-17",
+          "score": 68.1,
+          "tier": "watch",
+          "liquidity": 51583.3,
+          "volume_1h": 536832.47,
+          "change_1h": 959.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "9rbKkz2BDQBVgZmrHY6d7PTq2ge91gkpEyE4y9PPpump",
+          "symbol": "Leonida",
+          "scanned_at": 1794968120.8202033,
+          "scanned_date": "2026-11-18",
+          "score": 68.0,
+          "tier": "watch",
+          "liquidity": 56384.18,
+          "volume_1h": 782506.39,
+          "change_1h": 1596.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "4z7LXmQewWk5LLDTbTZEeGpeUhTFR1dHGvg7ckhbpump",
+          "symbol": "CSI",
+          "scanned_at": 1794945652.0711975,
+          "scanned_date": "2026-11-17",
+          "score": 67.8,
+          "tier": "watch",
+          "liquidity": 30336.79,
+          "volume_1h": 150130.24,
+          "change_1h": 421.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "ANNzAQ2ADnquKGoKMsMt3ByLASo93pFnA23D8KW7pump",
+          "symbol": "JVOLT",
+          "scanned_at": 1794924490.369444,
+          "scanned_date": "2026-11-17",
+          "score": 67.7,
+          "tier": "watch",
+          "liquidity": 48586.64,
+          "volume_1h": 515380.85,
+          "change_1h": 847.0,
+          "safety": "safe"
+        },
+        {
+          "chain": "solana",
+          "address": "9rbKkz2BDQBVgZmrHY6d7PTq2ge91gkpEyE4y9PPpump",
+          "symbol": "Leonida",
+          "scanned_at": 1794969029.563461,
+          "scanned_date": "2026-11-18",
+          "score": 67.7,
+          "tier": "watch",
+          "liquidity": 56442.09,
+          "volume_1h": 626946.87,
+          "change_1h": 53.49,
+          "safety": "safe"
+        }
+      ]
+    },
+    "x": {
+      "source": "/var/lib/x-engagement/engagement.sqlite (mode=ro)",
+      "count": 6,
+      "items": [
+        {
+          "tweet_id": "2111753374949581024",
+          "url": "https://x.com/bidafa8888/status/2111753374949581024",
+          "created_at": "2026-10-18T09:36:53.000Z",
+          "observed_at": 1794983146.9217117,
+          "observed_date": "2026-11-18",
+          "views": 670,
+          "likes": 0,
+          "replies": 1,
+          "retweets": 0,
+          "quotes": 0,
+          "bookmarks": 0,
+          "text": "我做什么：\n\n一个自建加密雷达。\n盯币安 Alpha、meme 链上、跨平台套利。\n\n我不喊单。\n数据好就贴，不好也贴。\n\n比如：\n· 105 笔纸面成交，正收益 0 笔\n· 40% 的妖币一小时零成交\n· 算错 3 倍费率，把机会算成 0\n\n看一个不喊单的人怎么用数据做决定。"
+        },
+        {
+          "tweet_id": "2122507147112230976",
+          "url": "https://x.com/bidafa8888/status/2122507147112230976",
+          "created_at": "2026-11-17T01:48:32.000Z",
+          "observed_at": 1794983146.9217117,
+          "observed_date": "2026-11-18",
+          "views": 102,
+          "likes": 0,
+          "replies": 0,
+          "retweets": 0,
+          "quotes": 0,
+          "bookmarks": 0,
+          "text": "在@42space挑便宜盘，省点交易成本。\n 全站29个盘，1美元逐个实测：只有2个真便宜。\n 另外25个，一买就亏21%到30%。\n 巡检程序还有个bug：以前只测第1个盘。\n 早上实测：交易107美元，亏2.76美元。\n 教训：便宜不等于省钱，先拿1美元实测。"
+        },
+        {
+          "tweet_id": "2122560196501553236",
+          "url": "https://x.com/bidafa8888/status/2122560196501553236",
+          "created_at": "2026-11-17T05:19:20.000Z",
+          "observed_at": 1794983146.9217117,
+          "observed_date": "2026-11-18",
+          "views": 118,
+          "likes": 0,
+          "replies": 0,
+          "retweets": 0,
+          "quotes": 1,
+          "bookmarks": 0,
+          "text": "在@42space把GTA VI首日销售额9个结果全买了。\n 不管哪个结果中，到期都赔30美元。\n 成本28.17美元，11月19日停售、11月26日结算。\n 差价1.83美元、约6.5%，但不结算就亏本金，你会拿吗？"
+        },
+        {
+          "tweet_id": "2122678816132968635",
+          "url": "https://x.com/bidafa8888/status/2122678816132968635",
+          "created_at": "2026-11-17T13:10:41.000Z",
+          "observed_at": 1794983146.9217117,
+          "observed_date": "2026-11-18",
+          "views": 97,
+          "likes": 0,
+          "replies": 0,
+          "retweets": 0,
+          "quotes": 0,
+          "bookmarks": 1,
+          "text": "给你的AI Agent 装上超强大脑！\n\nClawby 为金融 Agent 提供实时行情、链上数据、资金流分析及交易信号 —— 365+ 接口，一个 API key，一键搞定！\n\n🎁 使用邀请码 lfl63w 加入 Clawby！\n\nhttps://www.openclawby.com/login?ref=lfl63w&c=bixiaowu.2b6atz.0.eSTKVbWHgGT5zkox0f8w1K\n\n@openclawby"
+        },
+        {
+          "tweet_id": "2122915444730589573",
+          "url": "https://x.com/bidafa8888/status/2122915444730589573",
+          "created_at": "2026-11-18T04:50:58.000Z",
+          "observed_at": 1794983146.9217117,
+          "observed_date": "2026-11-18",
+          "views": 11,
+          "likes": 0,
+          "replies": 0,
+          "retweets": 0,
+          "quotes": 0,
+          "bookmarks": 0,
+          "text": "跟进昨天的篮子：@42space 的 GTA VI 首日销售额，赔付跟着池子变。\n 今早链上重算了 9 个结果，平均下来 31.17 美元。\n 最可能的结果只赔 23.34 美元，成本 28.17 美元。\n 11 月 19 日停售、26 日结算，你会等它结算吗？"
+        },
+        {
+          "tweet_id": "2122295720300650925",
+          "url": "https://x.com/bidafa8888/status/2122295720300650925",
+          "created_at": "2026-11-16T11:48:24.000Z",
+          "observed_at": 1794966591.4632628,
+          "observed_date": "2026-11-18",
+          "views": 56,
+          "likes": 0,
+          "replies": 0,
+          "retweets": 0,
+          "quotes": 0,
+          "bookmarks": 0,
+          "text": "今天观察清单：3 只币，前 10 大户控盘都超六成。\n控盘度 = 前 10 大钱包占流通量比，合约地址已剔除。\nPIEVERSE 88.9%/1.90，BLESS 73.6%/0.0118，KOMA 64.8%/0.0126 美元；持仓合计 3699 万美元。\n集中度高不等于会涨，先查哪一只？"
+        }
+      ]
+    }
+  }
+}
+

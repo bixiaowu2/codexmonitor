@@ -1,0 +1,7 @@
+[
+  "function checkIn(uint256 tokenId)",
+  "function hasCheckedInToday(uint256 tokenId) view returns (bool)",
+  "function streakOf(uint256 tokenId) view returns (uint256)",
+  "function lastCheckInDay(uint256 tokenId) view returns (uint256)",
+  "event CheckedIn(uint256 indexed tokenId, uint256 day, uint256 streak)"
+]
