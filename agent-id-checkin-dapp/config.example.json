@@ -1,0 +1,8 @@
+{
+  "_comment": "部署后由 lead 填真实值；不要写入私钥、助记词、API key 或配对码。当前全空，签到按钮保持禁用。",
+  "contractAddress": "",
+  "contractAbiPath": "./contracts/checkin-abi.json",
+  "agentIdContract": "0x60b9262456de011f7d15a54cdd8c48baaa8b022f",
+  "chainId": 56,
+  "dataUrl": "./data/latest.json"
+}
