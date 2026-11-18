@@ -7,6 +7,7 @@ h1{margin:0 0 6px;font-size:28px}
 button{background:#2f6df6;border:0;border-radius:8px;color:#fff;padding:10px 16px;font-size:15px;cursor:pointer;margin-right:10px}
 button:disabled{background:#3a3f4a;cursor:not-allowed}
 #status{margin-top:12px;color:#aeb5c4}
+.counters{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 14px;color:#c9d0dc}
 .hidden{display:none}
 section{background:#15181e;border:1px solid #2b303a;border-radius:12px;padding:18px;margin:18px 0}
 table{width:100%;border-collapse:collapse;font-size:14px}

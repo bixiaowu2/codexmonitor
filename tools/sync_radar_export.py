@@ -58,7 +58,7 @@ def load_doc(args):
         key = os.environ.get(SSH_KEY_ENV, "").strip()
         if not key:
             raise SystemExit("缺环境变量 %s：公开仓库不接受硬编码私钥路径" % SSH_KEY_ENV)
-        key_path = Path(key).expanduser()
+        key_path = Path(os.path.expandvars(key)).expanduser()
         if not key_path.exists():
             raise SystemExit("环境变量 %s 指向的文件不存在" % SSH_KEY_ENV)
         cmd = ["ssh", "-i", str(key_path), "-o", "ConnectTimeout=15", HOST, "cat " + REMOTE]

@@ -20,12 +20,19 @@
       <div id="status" role="status">未连接钱包</div>
     </section>
 
+    <section id="leaderboard" class="hidden">
+      <h2>签到排行榜 <span class="muted">（只读链上事件）</span></h2>
+      <p class="muted">统计投稿期内交互过本合约的地址；连续天数按链上区块时间推算。</p>
+      <div id="counters" class="counters"></div>
+      <div id="board"></div>
+    </section>
+
     <section id="panel" class="hidden">
       <h2>当日雷达数据 <span id="data-date"></span></h2>
       <p id="generated-at" class="muted"></p>
       <div id="sections"></div>
     </section>
-    <footer>非投资建议 · 动态数据可能滞后 · 签到状态以链上为准</footer>
+    <footer>非投资建议 · 动态数据可能滞后 · 签到状态以链上为准 · 每笔签到都是链上交易，需钱包确认并自行承担 gas</footer>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
   <script src="app.js"></script>
