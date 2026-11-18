@@ -19,7 +19,7 @@ PATTERNS = [
     ("GENERIC_API_TOKEN", re.compile(r"\b(?:sk|ghp|gho|ghs|ghu|github_pat|xoxb|xoxp)_[A-Za-z0-9_\-]{20,}\b")),
     ("MNEMONIC_12_24", re.compile(r"\b(?:[a-z]{3,}\s+){11,23}[a-z]{3,}\b")),
     ("HARDCODED_SECRET_PATH", re.compile(r"(?:ssh-key|\.credentials|\.env\b|id_rsa|id_ed25519)", re.I)),
-    ("HARDCODED_KEY_PATH_CONST", re.compile(r"^\s*(?:SSH_KEY|PRIVATE_KEY|KEY_PATH|KEY_FILE)\s*=", re.I | re.M)),
+    ("HARDCODED_KEY_PATH_CONST", re.compile(r"^\s*(?:SSH_KEY|PRIVATE_KEY|KEY_PATH|KEY_FILE)\s*=\s*(?!['\"][A-Z0-9_]+'\"][^#]*$)", re.I | re.M)),
 ]
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
