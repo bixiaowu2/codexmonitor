@@ -8,7 +8,8 @@
 - [x] `python3 scripts/scan_secrets.py --root . --strict` 通过（0 命中）。
 - [x] `node --check app.js` 通过。
 - [x] 数据面板：`date`/`generated_at`/`sections.stocks|meme|x` 结构校验通过；静态数据不含敏感字段。
-- [ ] 排行榜：合约地址 + 只读 RPC 就绪后，跑正例（有事件）与反例（无地址/无事件/查询失败）并确认只读取链上事件。
+- [x] 排行榜离线正反例：localStorage 注入 fixture 的正例与畸形 fixture 的反例均通过（2026-11-19）。
+- [ ] 排行榜链上正反例：合约地址 + 只读 RPC 就绪后，跑有事件、无事件、查询失败三类并确认只读取链上事件。
 - [ ] GitHub 推送与 Pages 发布：需合法认证/已授权空仓库；不得通过邮件传 token。
 
 当前状态（2026-11-19 上午）：已 git init 并提交本地 main；未推送、未部署、未发布、未花 gas。公开仓库与发布认证路径待 lead 提供。

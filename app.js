@@ -68,10 +68,31 @@ async function leaderboardProvider(){
   throw new Error('排行榜需要只读 RPC：请配置 RPC_URL 或先连接钱包');
 }
 
+function ledgerLeaderboard(){
+  // Deterministic offline fixture for release checks: never used when contract/RPC is configured.
+  const raw=localStorage.getItem('agentid_leaderboard_fixture');
+  if(!raw) return null;
+  const rows=JSON.parse(raw);
+  if(!Array.isArray(rows)) throw new Error('排行榜测试数据必须是数组');
+  const safe=rows.map(r=>({token:String(r.token||'').slice(0,80), streak:Math.max(0,Math.floor(Number(r.streak)||0)), last:String(r.last||'').slice(0,10)})).filter(r=>r.token && r.last);
+  safe.sort((a,b)=>b.streak-a.streak || b.last.localeCompare(a.last));
+  return {rows:safe, events:safe.length, sources:safe.length};
+}
+
+function renderLeaderboard(rows, events, sources){
+  const board=$('board'), counters=$('counters');
+  counters.innerHTML='<span>参与 tokenId：'+sources+'</span><span>签到事件：'+events+'</span><span>当前连续 ≥2 天：'+rows.filter(r=>r.streak>=2).length+'</span>';
+  board.innerHTML=rows.length ? '<table><thead><tr><th>tokenId</th><th>当前连续天数</th><th>最近签到</th></tr></thead><tbody>'+
+    rows.slice(0,20).map(r=>'<tr><td>'+esc(shortAddr(r.token))+'</td><td>'+esc(r.streak)+'</td><td>'+esc(r.last)+'</td></tr>').join('')+'</tbody></table>'
+    : '<p class="muted">投稿期内暂无签到事件</p>';
+}
+
 async function loadLeaderboard(){
-  const box=$('leaderboard'), board=$('board'), counters=$('counters');
+  const box=$('leaderboard');
   box.classList.remove('hidden');
-  if(!CONTRACT_ADDRESS){ board.innerHTML='<p class="muted">合约未配置，排行榜暂不可用</p>'; counters.textContent=''; return; }
+  const fixture=ledgerLeaderboard();
+  if(fixture){ renderLeaderboard(fixture.rows, fixture.events, fixture.sources); return; }
+  if(!CONTRACT_ADDRESS){ $('board').innerHTML='<p class="muted">合约未配置，排行榜暂不可用</p>'; $('counters').textContent=''; return; }
   try{
     const provider=await leaderboardProvider();
     if(!provider.getLogs) throw new Error('当前 provider 不支持事件查询');
@@ -98,11 +119,8 @@ async function loadLeaderboard(){
       rows.push({token,streak,last:new Date(b.timestamp*1000).toISOString().slice(0,10)});
     }
     rows.sort((a,b)=>b.streak-a.streak || b.last.localeCompare(a.last));
-    counters.innerHTML='<span>参与 tokenId：'+rows.length+'</span><span>签到事件：'+logs.length+'</span><span>当前连续 ≥2 天：'+rows.filter(r=>r.streak>=2).length+'</span>';
-    board.innerHTML=rows.length ? '<table><thead><tr><th>tokenId</th><th>当前连续天数</th><th>最近签到</th></tr></thead><tbody>'+
-      rows.slice(0,20).map(r=>'<tr><td>'+esc(shortAddr(r.token))+'</td><td>'+esc(r.streak)+'</td><td>'+esc(r.last)+'</td></tr>').join('')+'</tbody></table>'
-      : '<p class="muted">投稿期内暂无签到事件</p>';
-  }catch(e){ board.innerHTML='<p class="muted">排行榜读取失败：'+esc(e.message)+'</p>'; counters.textContent=''; }
+    renderLeaderboard(rows, logs.length, rows.length);
+  }catch(e){ $('board').innerHTML='<p class="muted">排行榜读取失败：'+esc(e.message)+'</p>'; $('counters').textContent=''; }
 }
 
 async function loadData(){
