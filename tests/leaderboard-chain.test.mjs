@@ -132,10 +132,10 @@ await test('反例：窗口外事件被过滤', async () => {
   assert.deepEqual(plain(rows), []);
 });
 
-await test('正例：生产分片函数按 45k 窗口读到 6 条链上 CheckedIn 事件结构', async () => {
+await test('正例：生产分片函数按 1000 块窗口读到 6 条链上 CheckedIn 事件结构', async () => {
   const app = loadApp();
   assert.equal(app.LEADERBOARD_DEPLOY_BLOCK, 0x8047035);
-  assert.equal(app.LEDGER_LOG_CHUNK, 45000);
+  assert.equal(app.LEDGER_LOG_CHUNK, 1000);
   const captured = JSON.parse(readFileSync(join(here, 'fixtures', 'checkedin-event-shape.json'), 'utf8'));
   assert.equal(captured.length, 6);
   const realLogs = captured.map((event, index) => ({
@@ -151,11 +151,11 @@ await test('正例：生产分片函数按 45k 窗口读到 6 条链上 CheckedI
       assert.equal(query.address.toLowerCase(), '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7');
       assert.equal(query.topics[0], '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
       assert.ok(query.toBlock - query.fromBlock + 1 <= app.LEDGER_LOG_CHUNK);
-      return query.fromBlock === app.LEADERBOARD_DEPLOY_BLOCK ? realLogs : [];
+      return query.fromBlock === 0x8047bed ? realLogs : [];
     },
   };
   const logs = await app.fetchLeaderboardLogs(provider, '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7', '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
-  assert.equal(calls, 2);
+  assert.equal(calls, Math.ceil((0x805b2cf - app.LEADERBOARD_DEPLOY_BLOCK + 1) / app.LEDGER_LOG_CHUNK));
   assert.equal(logs.length, 6);
   const decoded = logs.map(log => prodIface.parseLog(log));
   for (const event of decoded) {
