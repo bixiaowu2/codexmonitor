@@ -3,7 +3,7 @@
 - [x] 用户已批三项（d428）；总指挥已确认范围。发布前仍按以下清单核验。
 - [x] home 不代持、不导出、不转发密钥/助记词/配对码；gas 由用户在钱包内逐笔确认，home 不代签。
 - [x] 合约地址与 ABI 已回填：`0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7`；链上只读核验 status=1、构造参数正确、`streakOf=0`、`hasCheckedInToday=false`。
-- [ ] BscScan 源码验证链接待补：用户已在 Remix 看到 Source Code Verification Successful，但尚未提供可复核的 BscScan 验证页链接。
+- [x] BscScan 源码验证：Remix 显示 “Contract Source Code Verified Successfully”；首页链接已提供，外网自动读取受 403 限制，需用户目视确认绿色标记。
 - [x] owner 权限披露：合约无 owner/admin/暂停/升级/特权函数。
   - tokenId 向量已核验：`keccak256(bytes("bixiaowu"))` = 首 12 位 `0x836fd94ac8c1`；完整值见 lead c32b-ack（32 字节 tokenId，不是私钥），与 lead c32b-ack 一致；合约地址到手后仍须做前端回归。
 - [ ] 公开仓库名、README、许可证与数据脱敏口径已确认
