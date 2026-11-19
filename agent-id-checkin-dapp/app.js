@@ -69,9 +69,24 @@ function esc(s){
 function shortAddr(a){ return a && a.length>10 ? a.slice(0,6)+'…'+a.slice(-4) : (a||'—'); }
 
 async function leaderboardProvider(){
-  if (RPC_URL) return new ethers.JsonRpcProvider(RPC_URL);
-  if (state.provider) return state.provider;
-  throw new Error('排行榜需要只读 RPC：请配置 RPC_URL 或先连接钱包');
+  return new ethers.JsonRpcProvider(RPC_URL);
+}
+
+// Public BSC RPCs reject `fromBlock:0 -> latest` event queries (archive-token
+// limits / -32005). Use the deployment block as a fixed lower bound and walk
+// bounded ranges; each window stays small enough for key-free public nodes.
+const LEADERBOARD_DEPLOY_BLOCK = 0x8047035;
+const LEDGER_LOG_CHUNK = 45000;
+
+async function fetchLeaderboardLogs(provider, address, topic){
+  const latest=await provider.getBlockNumber();
+  const logs=[];
+  for(let from=LEADERBOARD_DEPLOY_BLOCK; from<=latest; from+=LEDGER_LOG_CHUNK){
+    const to=Math.min(from+LEDGER_LOG_CHUNK-1, latest);
+    const part=await provider.getLogs({address, topics:[topic], fromBlock:from, toBlock:to});
+    logs.push(...part);
+  }
+  return logs;
 }
 
 function ledgerLeaderboard(){
@@ -132,8 +147,8 @@ async function loadLeaderboard(){
     const provider=await leaderboardProvider();
     if(!provider.getLogs) throw new Error('当前 provider 不支持事件查询');
     const c=new ethers.Contract(CONTRACT_ADDRESS,CHECKIN_EVENT_ABI,provider);
-    const filt=c.filters.CheckedIn();
-    const logs=await provider.getLogs({...filt, fromBlock:0, toBlock:'latest'});
+    const topic=c.filters.CheckedIn().topics[0];
+    const logs=await fetchLeaderboardLogs(provider, CONTRACT_ADDRESS, topic);
     blockByNumberForLeaderboard = (n) => provider.getBlock(n);
     const cur=await provider.getBlock('latest');
     const rows=await aggregateLeaderboardLogs(logs, e=>c.interface.parseLog(e), cur.timestamp, ENTRY_WINDOW_START, ENTRY_WINDOW_END);
@@ -155,7 +170,7 @@ async function loadData(){
 // Test-only export: absent in browsers (no module.exports), used by the
 // isolated Node harness to inject fixed RPC-shaped logs.
 if(typeof module!=='undefined' && module.exports){
-  module.exports = { aggregateLeaderboardLogs, setBlockResolver: fn => { blockByNumberForLeaderboard = fn; }, ENTRY_WINDOW_START, ENTRY_WINDOW_END };
+  module.exports = { aggregateLeaderboardLogs, setBlockResolver: fn => { blockByNumberForLeaderboard = fn; }, ENTRY_WINDOW_START, ENTRY_WINDOW_END, LEADERBOARD_DEPLOY_BLOCK, LEDGER_LOG_CHUNK, fetchLeaderboardLogs };
 }
 
 if(typeof document!=='undefined' && $('connect') && $('checkin')){
