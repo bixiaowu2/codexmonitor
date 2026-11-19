@@ -16,4 +16,4 @@
 - [x] 排行榜链上读取路径可注入测试（2026-11-19）：`node tests/leaderboard-chain.test.mjs` 4/4 PASS（有事件正例、无事件反例、查询失败反例、窗口外过滤）；固定 block/log fixture，无网络/无钱包/无密钥。真实合约地址到手后再用同一路径跑一次端到端。
 - [x] GitHub 推送与 Cloudflare 发布：main HEAD acf53eb，Cloudflare Worker agent-id-checkin-dapp 已发布（Version b8d14f6d）；未使用邮件传 token。
 
-当前状态（2026-11-19 21:xx CST）：合约已部署成功（TxHash `0x90ea53f9cc379fc749b26b19e5335e62a865f32b64274f8748af842040241af6`），前端已回填地址/ABI/只读 RPC；密钥扫描 23 文件 0 命中，`node --check` 与排行榜链上路径 4/4 离线测试通过。三项收尾已完成：BscScan 源码 Exact Match 已确认并回填、GitHub/Cloudflare 已发布、总指挥回执已发送；MCP 已按 dff7 撤销。真实签到端到端须由持 Agent ID 的用户本人签名付 gas，当前未代做。
+当前状态（2026-11-19 21:xx CST）：合约已部署成功（TxHash `0x90ea53f9cc379fc749b26b19e5335e62a865f32b64274f8748af842040241af6`），前端已回填地址/ABI/只读 RPC；已发布 dApp 子目录密钥扫描 11 文件 0 命中，`node --check` 与排行榜链上路径 4/4 离线测试通过。三项收尾已完成：BscScan 源码 Exact Match 已确认并回填、GitHub/Cloudflare 已发布、总指挥回执已发送；MCP 已按 dff7 撤销。真实签到端到端须由持 Agent ID 的用户本人签名付 gas，当前未代做。
