@@ -7,13 +7,11 @@ __pycache__/
 *.pyc
 outputs/
 work/
-
 # Environment backups and local credentials in all programs
 .env.*
 !.env.example
 *.key
 *.pem
-
 # Runtime and private configuration for every monitor
 **/.env
 **/.env.*
@@ -25,3 +23,14 @@ work/
 **/*.jsonl
 **/*.key
 **/*.pem
+*.bak-*
+data-latest.sample.json
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+# contract deployment pack: build artifacts (compiler fixtures trigger secret scanner)
+contract-source/out/
+contract-source/cache/
+contract-source/lib/

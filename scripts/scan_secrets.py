@@ -24,7 +24,14 @@ PATTERNS = [
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 SKIP_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".mov", ".zip", ".gz", ".ico")
-SKIP_RELATIVE_PATHS = {"scripts/scan_secrets.py", ".gitignore", ".assetsignore"}
+SKIP_BASENAMES = {"scan_secrets.py", ".gitignore", ".assetsignore"}
+
+# Public, non-secret 32-byte identifiers that match the 64-hex "private key"
+# shape. Whitelist only the exact literal, never the rule itself.
+KNOWN_PUBLIC_HEX = {
+    # keccak256("bixiaowu"): the Agent ID tokenId used by this dApp.
+    "0x836fd94ac8c1e77904f3c185ad36c3624722d6668e5688219f1fd41d3ed14f18",
+}
 MAX_BYTES = 2 * 1024 * 1024
 
 
@@ -45,7 +52,7 @@ def main():
         for name in filenames:
             path = os.path.join(dirpath, name)
             rel = os.path.relpath(path, root)
-            if name.endswith(SKIP_SUFFIXES) or rel in SKIP_RELATIVE_PATHS:
+            if name.endswith(SKIP_SUFFIXES) or name in SKIP_BASENAMES:
                 continue
             try:
                 if os.path.getsize(path) > MAX_BYTES:
@@ -57,8 +64,11 @@ def main():
                 continue
             scanned += 1
             for lineno, line in enumerate(lines, 1):
+                scrubbed = line
+                for known in KNOWN_PUBLIC_HEX:
+                    scrubbed = scrubbed.replace(known, "KNOWN_PUBLIC_TOKEN_ID")
                 for rule, pattern in PATTERNS:
-                    if pattern.search(line):
+                    if pattern.search(scrubbed):
                         hits.append((os.path.relpath(path, root), lineno, rule))
 
     for path, lineno, rule in hits:
