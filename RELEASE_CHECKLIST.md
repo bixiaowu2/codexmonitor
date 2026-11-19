@@ -7,7 +7,8 @@
 - [x] owner 权限披露：合约无 owner/admin/暂停/升级/特权函数。
   - tokenId 向量已核验：`keccak256(bytes("bixiaowu"))` = 首 12 位 `0x836fd94ac8c1`；完整值见 lead c32b-ack（32 字节 tokenId，不是私钥），与 lead c32b-ack 一致；合约地址到手后仍须做前端回归。
 - [ ] 公开仓库名、README、许可证与数据脱敏口径已确认
-- [ ] 发布渠道、文案、双标签与问卷链接已确认；禁语扫描通过；不冒充 Binance、不承诺收益、不刷量。
+- [x] 发布渠道、文案、双标签与问卷链接已确认；禁语扫描通过；不冒充 Binance、不承诺收益、不刷量。
+- [x] BscScan 源码验证：Remix 插件显示 “Contract Source Code Verified Successfully”（2026-11-19 21:08 CST）；验证页链接待用户回传。
 - [x] `python3 scripts/scan_secrets.py --root . --strict` 通过（0 命中）。
 - [x] `node --check app.js` 通过。
 - [x] 数据面板：`date`/`generated_at`/`sections.stocks|meme|x` 结构校验通过；静态数据不含敏感字段。
