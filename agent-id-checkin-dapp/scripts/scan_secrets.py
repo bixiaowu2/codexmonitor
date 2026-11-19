@@ -24,7 +24,7 @@ PATTERNS = [
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 SKIP_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".mov", ".zip", ".gz", ".ico")
-SKIP_RELATIVE_PATHS = {"scripts/scan_secrets.py"}
+SKIP_RELATIVE_PATHS = {"scripts/scan_secrets.py", ".gitignore", ".assetsignore"}
 MAX_BYTES = 2 * 1024 * 1024
 
 

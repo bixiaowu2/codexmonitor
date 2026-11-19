@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.bak-*
+data-latest.sample.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
