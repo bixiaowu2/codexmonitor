@@ -13,7 +13,8 @@
 - [x] `node --check app.js` 通过。
 - [x] 数据面板：`date`/`generated_at`/`sections.stocks|meme|x` 结构校验通过；静态数据不含敏感字段。
 - [x] 排行榜离线正反例：localStorage 注入 fixture 的正例与畸形 fixture 的反例均通过（2026-11-19）。
-- [x] 排行榜链上读取路径可注入测试（2026-11-19）：`node tests/leaderboard-chain.test.mjs` 4/4 PASS（有事件正例、无事件反例、查询失败反例、窗口外过滤）；固定 block/log fixture，无网络/无钱包/无密钥。真实合约地址到手后再用同一路径跑一次端到端。
-- [x] GitHub 推送与 Cloudflare 发布：main HEAD acf53eb，Cloudflare Worker agent-id-checkin-dapp 已发布（Version b8d14f6d）；未使用邮件传 token。
+- [x] 排行榜链上读取路径测试已补真实 ABI 回归（2026-11-19 夜间）：`node tests/leaderboard-chain.test.mjs` 6/6 PASS。新增正例：用 ethers 按合约真实事件编码 3 topics + 32B data，生产 ABI 能解出 `tokenId/day/streak`；新增反例：旧 ABI 解同一事件报 `data out-of-bounds`，证明旧 4/4 只测了假 parseLog、不足以覆盖生产路径。其余为有事件正例、无事件反例、查询失败反例、窗口外过滤；固定 block/log fixture，无网络/无钱包/无密钥。
+- [x] `CheckedIn` ABI 与 Solidity 源码对齐（2026-11-19 夜间）：根 `app.js`、发布子目录 `app.js`、`contracts/checkin-abi.json` 均已把 `day` 标为 `indexed`；两处 app.js sha256 同为 `74f5b166833b2ca0f426055005a2db5ef271b1d0ef79f1f82a9dedc679869ffb`。
+- [x] GitHub 推送与 Cloudflare 发布：main HEAD acf53eb，Cloudflare Worker agent-id-checkin-dapp 已发布（Version b8d14f6d）；未使用邮件传 token。**夜间 ABI 修复与 6/6 回归目前仅在本地工作树，未 push、未重新发布 Cloudflare。**
 
-当前状态（2026-11-19）：合约已部署成功（公开 TxHash：`0x90ea…af6`），前端已回填地址/ABI/只读 RPC；已发布 dApp 子目录密钥扫描 11 文件 0 命中，`node --check` 与排行榜链上路径 4/4 离线测试通过。三项收尾已完成：BscScan 源码 Exact Match 已确认并回填、GitHub/Cloudflare 已发布、总指挥回执已发送；MCP 已按 dff7 撤销。真实签到端到端须由持 Agent ID 的用户本人签名付 gas，当前未代做。
+当前状态（2026-11-19 夜间）：合约已部署成功（公开 TxHash：`0x90ea…af6`），前端已回填地址/ABI/只读 RPC。夜间发现并本地修复了 `CheckedIn` 事件 ABI 少标 `indexed day` 的生产 bug：原配置会让真实签到日志在排行榜解析时触发 `data out-of-bounds`；已补 ethers 真实事件编码/解码的正反例，6/6 PASS。已发布 dApp 子目录密钥扫描 12 文件 0 命中，`node --check` 与两处 app.js 哈希一致性通过。三项收尾已完成：BscScan 源码 Exact Match 已确认并回填、GitHub/Cloudflare 已发布、总指挥回执已发送；MCP 已按 dff7 撤销。**ABI 修复尚未 push、尚未重新发布到 Cloudflare，需 lead/用户决定发布窗口。** 真实签到端到端须由持 Agent ID 的用户本人签名付 gas，当前未代做。

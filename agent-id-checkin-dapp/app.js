@@ -7,7 +7,7 @@ const CONTRACT_ABI = [
   'function lastCheckInDay(uint256 tokenId) view returns (uint256)',
   'function agentId() view returns (address)'
 ];
-const CHECKIN_EVENT_ABI = ['event CheckedIn(uint256 indexed tokenId, uint256 day, uint256 streak)'];
+const CHECKIN_EVENT_ABI = ['event CheckedIn(uint256 indexed tokenId, uint256 indexed day, uint256 streak)'];
 const ENTRY_WINDOW_START = Date.UTC(2026, 10, 18, 8);  // 2026-11-18T08:00Z，投稿期起
 const ENTRY_WINDOW_END = Date.UTC(2026, 11, 9, 8);    // 2026-12-09T08:00Z，投稿期止
 const RPC_URL = 'https://bsc-dataseed.bnbchain.org';  // 只读公共 RPC；钱包签名仍走 injected provider
