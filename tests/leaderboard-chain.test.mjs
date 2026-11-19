@@ -132,4 +132,40 @@ await test('反例：窗口外事件被过滤', async () => {
   assert.deepEqual(plain(rows), []);
 });
 
-console.log(`\n${passed}/${passed} PASS — leaderboard chain read path (offline fixtures)`);
+await test('正例：生产分片函数按 45k 窗口读到 6 条链上 CheckedIn 事件结构', async () => {
+  const app = loadApp();
+  assert.equal(app.LEADERBOARD_DEPLOY_BLOCK, 0x8047035);
+  assert.equal(app.LEDGER_LOG_CHUNK, 45000);
+  const captured = JSON.parse(readFileSync(join(here, 'fixtures', 'checkedin-event-shape.json'), 'utf8'));
+  assert.equal(captured.length, 6);
+  const realLogs = captured.map((event, index) => ({
+    blockNumber: event.blockNumber,
+    topics: ['0x' + event.topic0, ethers.toBeHex(index + 1, 32), ethers.toBeHex('0x5128', 32)],
+    data: ethers.toBeHex(1, 32),
+  }));
+  let calls = 0;
+  const provider = {
+    async getBlockNumber() { return 0x805b2cf; },
+    async getLogs(query) {
+      calls++;
+      assert.equal(query.address.toLowerCase(), '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7');
+      assert.equal(query.topics[0], '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
+      assert.ok(query.toBlock - query.fromBlock + 1 <= app.LEDGER_LOG_CHUNK);
+      return query.fromBlock === app.LEADERBOARD_DEPLOY_BLOCK ? realLogs : [];
+    },
+  };
+  const logs = await app.fetchLeaderboardLogs(provider, '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7', '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
+  assert.equal(calls, 2);
+  assert.equal(logs.length, 6);
+  const decoded = logs.map(log => prodIface.parseLog(log));
+  for (const event of decoded) {
+    assert.equal(event.args.day.toString(), '20776');
+    assert.equal(event.args.streak.toString(), '1');
+  }
+  const rows = await withResolver(() => ({ timestamp: Date.UTC(2026, 10, 19, 0, 0, 0) / 1000 }), () =>
+    aggregateLeaderboardLogs(logs, log => prodIface.parseLog(log), Date.UTC(2026, 10, 20, 0, 0, 0) / 1000, ENTRY_WINDOW_START, ENTRY_WINDOW_END));
+  assert.equal(rows.length, 6);
+  assert.ok(rows.every(row => row.streak === 1 && row.last === '2026-11-19'));
+});
+
+console.log(`\n${passed}/${passed} PASS — leaderboard chain read path (offline fixtures + captured real event shape)`);

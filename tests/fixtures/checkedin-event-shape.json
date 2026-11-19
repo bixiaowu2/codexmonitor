@@ -1,0 +1,50 @@
+[
+  {
+    "blockNumber": "0x8047e20",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_1",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  },
+  {
+    "blockNumber": "0x804843d",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_2",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  },
+  {
+    "blockNumber": "0x8048445",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_3",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  },
+  {
+    "blockNumber": "0x804844d",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_4",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  },
+  {
+    "blockNumber": "0x804a56f",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_5",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  },
+  {
+    "blockNumber": "0x804a9b9",
+    "topic0": "4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9",
+    "tokenIdMarker": "PUBLIC_TOKEN_ID_6",
+    "dayHex": "0x5128",
+    "streakHex": "0x1",
+    "address": "0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7"
+  }
+]
