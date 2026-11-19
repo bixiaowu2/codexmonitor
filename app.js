@@ -1,10 +1,16 @@
-// 测试版前端：浏览器注入钱包；合约接口留桩，地址/ABI 由 lead 部署后填入。
-const CONTRACT_ADDRESS = ''; // TODO: 部署后填
-const CONTRACT_ABI = [];      // TODO: 部署后填 checkIn/hasCheckedInToday/streakOf/lastCheckInDay
+// 生产前端：浏览器注入钱包；合约已部署于 BNB Smart Chain 主网。
+const CONTRACT_ADDRESS = '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7';
+const CONTRACT_ABI = [
+  'function checkIn(uint256 tokenId)',
+  'function hasCheckedInToday(uint256 tokenId) view returns (bool)',
+  'function streakOf(uint256 tokenId) view returns (uint256)',
+  'function lastCheckInDay(uint256 tokenId) view returns (uint256)',
+  'function agentId() view returns (address)'
+];
 const CHECKIN_EVENT_ABI = ['event CheckedIn(uint256 indexed tokenId, uint256 day, uint256 streak)'];
 const ENTRY_WINDOW_START = Date.UTC(2026, 10, 18, 8);  // 2026-11-18T08:00Z，投稿期起
 const ENTRY_WINDOW_END = Date.UTC(2026, 11, 9, 8);    // 2026-12-09T08:00Z，投稿期止
-const RPC_URL = '';  // 可选：单独只读 RPC；留空则复用 injected provider
+const RPC_URL = 'https://bsc-dataseed.bnbchain.org';  // 只读公共 RPC；钱包签名仍走 injected provider
 const DATA_URL = './data/latest.json';
 const AGENT_ID_CONTRACT = '0x60b9262456de011f7d15a54cdd8c48baaa8b022f';
 
@@ -87,6 +93,35 @@ function renderLeaderboard(rows, events, sources){
     : '<p class="muted">投稿期内暂无签到事件</p>';
 }
 
+// Pure aggregation of CheckedIn logs -> leaderboard rows. Exposed on window
+// only so isolated tests can inject fixed RPC-shaped logs; production path passes
+// real logs from provider.getLogs and is otherwise unchanged.
+async function aggregateLeaderboardLogs(logs, parseLog, curTimestamp, entryStartMs, entryEndMs){
+  const byToken=new Map();
+  for(const log of logs){
+    const e=parseLog(log);
+    const token=e.args.tokenId.toString();
+    const prev=byToken.get(token);
+    if(!prev || log.blockNumber>prev.block) byToken.set(token,{block:log.blockNumber, streak:Number(e.args.streak)});
+  }
+  const rows=[];
+  for(const [token,last] of byToken){
+    const b=await blockByNumberForLeaderboard(last.block);
+    const day=Math.floor((b.timestamp-entryStartMs/1000)/86400)+1;
+    const today=Math.floor((curTimestamp-entryStartMs/1000)/86400)+1;
+    const inWindow=b.timestamp*1000>=entryStartMs && b.timestamp*1000<=entryEndMs;
+    if(!inWindow) continue;
+    const active=day===today || day===today-1;
+    const streak=active ? last.streak : 0;
+    rows.push({token,streak,last:new Date(b.timestamp*1000).toISOString().slice(0,10)});
+  }
+  rows.sort((a,b)=>b.streak-a.streak || b.last.localeCompare(a.last));
+  return rows;
+}
+
+// Injectable block resolver; production overrides this with provider.getBlock.
+let blockByNumberForLeaderboard = async () => { throw new Error('block resolver not configured'); };
+
 async function loadLeaderboard(){
   const box=$('leaderboard');
   box.classList.remove('hidden');
@@ -99,26 +134,9 @@ async function loadLeaderboard(){
     const c=new ethers.Contract(CONTRACT_ADDRESS,CHECKIN_EVENT_ABI,provider);
     const filt=c.filters.CheckedIn();
     const logs=await provider.getLogs({...filt, fromBlock:0, toBlock:'latest'});
-    const byToken=new Map();
-    for(const log of logs){
-      const e=c.interface.parseLog(log);
-      const token=e.args.tokenId.toString();
-      const prev=byToken.get(token);
-      if(!prev || log.blockNumber>prev.block) byToken.set(token,{block:log.blockNumber, streak:Number(e.args.streak)});
-    }
+    blockByNumberForLeaderboard = (n) => provider.getBlock(n);
     const cur=await provider.getBlock('latest');
-    const rows=[];
-    for(const [token,last] of byToken){
-      const b=await provider.getBlock(last.block);
-      const day=Math.floor((b.timestamp-ENTRY_WINDOW_START/1000)/86400)+1;
-      const today=Math.floor((cur.timestamp-ENTRY_WINDOW_START/1000)/86400)+1;
-      const inWindow=b.timestamp*1000>=ENTRY_WINDOW_START && b.timestamp*1000<=ENTRY_WINDOW_END;
-      if(!inWindow) continue;
-      const active=day===today || day===today-1;
-      const streak=active ? last.streak : 0;
-      rows.push({token,streak,last:new Date(b.timestamp*1000).toISOString().slice(0,10)});
-    }
-    rows.sort((a,b)=>b.streak-a.streak || b.last.localeCompare(a.last));
+    const rows=await aggregateLeaderboardLogs(logs, e=>c.interface.parseLog(e), cur.timestamp, ENTRY_WINDOW_START, ENTRY_WINDOW_END);
     renderLeaderboard(rows, logs.length, rows.length);
   }catch(e){ $('board').innerHTML='<p class="muted">排行榜读取失败：'+esc(e.message)+'</p>'; $('counters').textContent=''; }
 }
@@ -134,7 +152,15 @@ async function loadData(){
   $('panel').classList.remove('hidden');
 }
 
-$('connect').addEventListener('click',connect);
-$('checkin').addEventListener('click',checkin);
-loadData().catch(e=>{$('sections').innerHTML='<p>数据加载失败：'+e.message+'</p>';$('panel').classList.remove('hidden');});
-loadLeaderboard();
+// Test-only export: absent in browsers (no module.exports), used by the
+// isolated Node harness to inject fixed RPC-shaped logs.
+if(typeof module!=='undefined' && module.exports){
+  module.exports = { aggregateLeaderboardLogs, setBlockResolver: fn => { blockByNumberForLeaderboard = fn; }, ENTRY_WINDOW_START, ENTRY_WINDOW_END };
+}
+
+if(typeof document!=='undefined' && $('connect') && $('checkin')){
+  $('connect').addEventListener('click',connect);
+  $('checkin').addEventListener('click',checkin);
+  loadData().catch(e=>{$('sections').innerHTML='<p>数据加载失败：'+e.message+'</p>';$('panel').classList.remove('hidden');});
+  loadLeaderboard();
+}
