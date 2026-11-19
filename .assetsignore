@@ -1,0 +1,19 @@
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+/_worker.js
+/_routes.json
+/functions
+node_modules
+.git
+.DS_Store
+.npmrc
+
+# local caches/backups
+__pycache__/
+*.pyc
+*.bak
+*.bak-*
