@@ -14,6 +14,7 @@
 - [x] 数据面板：`date`/`generated_at`/`sections.stocks|meme|x` 结构校验通过；静态数据不含敏感字段。
 - [x] 排行榜离线正反例：localStorage 注入 fixture 的正例与畸形 fixture 的反例均通过（2026-11-19）。
 - [x] 排行榜链上读取路径测试已补真实 ABI 回归（2026-11-19 夜间）：`node tests/leaderboard-chain.test.mjs` 6/6 PASS。新增正例：用 ethers 按合约真实事件编码 3 topics + 32B data，生产 ABI 能解出 `tokenId/day/streak`；新增反例：旧 ABI 解同一事件报 `data out-of-bounds`，证明旧 4/4 只测了假 parseLog、不足以覆盖生产路径。其余为有事件正例、无事件反例、查询失败反例、窗口外过滤；固定 block/log fixture，无网络/无钱包/无密钥。
+- [x] 四台 Agentic 钱包首签链上核验（2026-11-19）：day 20776 各有 `CheckedIn` 事件且 status=1，4 个独立持 Agent ID 交互地址；创新奖门槛按 4/30、缺口 26 计。
 - [x] `CheckedIn` ABI 与 Solidity 源码对齐（2026-11-19 夜间）：根 `app.js`、发布子目录 `app.js`、`contracts/checkin-abi.json` 均已把 `day` 标为 `indexed`；两处 app.js sha256 同为 `74f5b166833b2ca0f426055005a2db5ef271b1d0ef79f1f82a9dedc679869ffb`。
 - [x] GitHub 推送与 Cloudflare 发布：ABI 修复与 6/6 回归已提交并推送公开仓库（main HEAD `b08ea30077f2db0c798701a76ef0cab8bc7614b0`）；Cloudflare Worker agent-id-checkin-dapp 已重新发布（Version deddbd17），线上 `https://agent-id-checkin-dapp.bixiaowu.workers.dev/app.js` 实测 HTTP 200、sha256 与本地修复版一致（`74f5b166833b2ca0f426055005a2db5ef271b1d0ef79f1f82a9dedc679869ffb`）；未使用邮件传 token。
 
