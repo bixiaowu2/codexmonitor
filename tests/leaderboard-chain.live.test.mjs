@@ -21,10 +21,15 @@ sandbox.exports = sandbox.module.exports;
 vm.runInNewContext(appSource, sandbox, { filename: join(here, '..', 'app.js') });
 const app = sandbox.module.exports;
 const sources = app.LEADERBOARD_RPCS;
-assert.deepEqual(sources.map(s => [s.url, s.chunk]), [
-  ['https://bsc-rpc.publicnode.com', 45000],
-  ['https://bsc.rpc.blxrbdn.com', 1000],
-], '双路 RPC/分片配置必须符合裁定');
+// vm realm 下数组原型不同，直接 deepEqual 会误判；改走 JSON 字符串比对。
+assert.equal(
+  JSON.stringify(sources.map(s => [s.url, s.chunk])),
+  JSON.stringify([
+    ['https://bsc-rpc.publicnode.com', 45000],
+    ['https://bsc.rpc.blxrbdn.com', 1000],
+  ]),
+  '双路 RPC/分片配置必须符合裁定'
+);
 assert.equal(app.RPC_URL, sources[0].url);
 const deploy = app.LEADERBOARD_DEPLOY_BLOCK;
 const address = '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7';

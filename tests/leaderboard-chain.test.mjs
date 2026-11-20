@@ -178,10 +178,13 @@ await test('正例：生产分片函数按 BLXR 1000 块窗口（主选导出 45
 
 // ---- 双路 fallback：主选失败自动切备选、两路都失败必须报错 ----
 const fakeLog = { blockNumber: 0x8047bed, topics: [], data: '0x' };
+// mock 按窗口是否含事件块返回，避免每个分片都吐一条造成重复事件。
+const logsForQuery = (query) =>
+  query.fromBlock <= fakeLog.blockNumber && fakeLog.blockNumber <= query.toBlock ? [fakeLog] : [];
 const makeFakeProvider = (name) => {
   if (name === 'publicnode-ok') return () => ({
     async getBlockNumber() { return 0x8047bee; },
-    async getLogs() { return [fakeLog]; },
+    async getLogs(query) { return logsForQuery(query); },
   });
   if (name === 'publicnode-fail') return () => ({
     async getBlockNumber() { throw new Error('-32005 rate limited'); },
@@ -189,7 +192,7 @@ const makeFakeProvider = (name) => {
   });
   if (name === 'blxr-ok') return () => ({
     async getBlockNumber() { return 0x8047bee; },
-    async getLogs() { return [fakeLog]; },
+    async getLogs(query) { return logsForQuery(query); },
   });
   if (name === 'blxr-fail') return () => ({
     async getBlockNumber() { throw new Error('exceed maximum block range'); },
