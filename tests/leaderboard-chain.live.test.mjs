@@ -13,6 +13,19 @@ if (!rpcUrl) {
   console.log('SKIP 设置 LEADERBOARD_LIVE_RPC 后运行生产只读验收');
   process.exit(0);
 }
+// Browser-path guard: a Node-only JSON-RPC test can pass even when the browser is
+// blocked by CORS. OPTIONS and POST must both expose ACAO=* for this public origin.
+const corsResponse = await fetch(rpcUrl, {
+  method: 'OPTIONS',
+  headers: {
+    Origin: 'https://agent-id-checkin-dapp.bixiaowu.workers.dev',
+    'Access-Control-Request-Method': 'POST',
+    'Access-Control-Request-Headers': 'content-type',
+  },
+});
+assert.equal(corsResponse.headers.get('access-control-allow-origin'), '*', '生产 RPC 必须允许浏览器跨域读取');
+await corsResponse.arrayBuffer();
+
 const here = dirname(fileURLToPath(import.meta.url));
 const appSource = readFileSync(join(here, '..', 'app.js'), 'utf8');
 const nodeRequire = createRequire(import.meta.url);
@@ -27,6 +40,10 @@ const app = sandbox.module.exports;
 const deploy = app.LEADERBOARD_DEPLOY_BLOCK;
 const chunk = app.LEDGER_LOG_CHUNK;
 assert.ok(chunk > 0 && chunk <= 1000, `生产分片必须 ≤1000，当前 ${chunk}`);
+const appRpcMatch = appSource.match(/const\s+RPC_URL\s*=\s*['"]([^'"]+)['"]/);
+assert.ok(appRpcMatch, '未能从生产 app.js 读取 RPC_URL');
+assert.equal(appRpcMatch[1], rpcUrl, 'LEADERBOARD_LIVE_RPC 必须与生产 app.js 的 RPC_URL 一致');
+
 const provider = new ethers.JsonRpcProvider(rpcUrl);
 const address = '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7';
 const topic = iface.getEvent('CheckedIn').topicHash;
