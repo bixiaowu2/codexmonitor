@@ -52,7 +52,15 @@ function loadApp() {
   return sandbox.module.exports;
 }
 
-const { aggregateLeaderboardLogs, setBlockResolver, ENTRY_WINDOW_START, ENTRY_WINDOW_END } = loadApp();
+const { aggregateLeaderboardLogs, setBlockResolver, ENTRY_WINDOW_START, ENTRY_WINDOW_END, LEADERBOARD_RPCS, RPC_URL, fetchLeaderboardLogsWithFallback } = loadApp();
+
+// 双路配置断言：主选 publicnode/45k，备选 BLXR/1k。
+assert.equal(LEADERBOARD_RPCS.length, 2);
+assert.equal(LEADERBOARD_RPCS[0].url, 'https://bsc-rpc.publicnode.com');
+assert.equal(LEADERBOARD_RPCS[0].chunk, 45000);
+assert.equal(LEADERBOARD_RPCS[1].url, 'https://bsc.rpc.blxrbdn.com');
+assert.equal(LEADERBOARD_RPCS[1].chunk, 1000);
+assert.equal(RPC_URL, LEADERBOARD_RPCS[0].url);
 
 // Fixed fixtures: BSC-like blocks within the 2026-11-18 08:00Z entry window.
 const DAY = 86400;
@@ -132,10 +140,10 @@ await test('反例：窗口外事件被过滤', async () => {
   assert.deepEqual(plain(rows), []);
 });
 
-await test('正例：生产分片函数按 1000 块窗口读到 6 条链上 CheckedIn 事件结构', async () => {
+await test('正例：生产分片函数按 BLXR 1000 块窗口（主选导出 45000）读到 6 条链上 CheckedIn 事件结构', async () => {
   const app = loadApp();
   assert.equal(app.LEADERBOARD_DEPLOY_BLOCK, 0x8047035);
-  assert.equal(app.LEDGER_LOG_CHUNK, 1000);
+  assert.equal(app.LEDGER_LOG_CHUNK, 45000);
   const captured = JSON.parse(readFileSync(join(here, 'fixtures', 'checkedin-event-shape.json'), 'utf8'));
   assert.equal(captured.length, 6);
   const realLogs = captured.map((event, index) => ({
@@ -150,12 +158,12 @@ await test('正例：生产分片函数按 1000 块窗口读到 6 条链上 Chec
       calls++;
       assert.equal(query.address.toLowerCase(), '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7');
       assert.equal(query.topics[0], '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
-      assert.ok(query.toBlock - query.fromBlock + 1 <= app.LEDGER_LOG_CHUNK);
+      assert.ok(query.toBlock - query.fromBlock + 1 <= 1000);
       return query.fromBlock === 0x8047bed ? realLogs : [];
     },
   };
-  const logs = await app.fetchLeaderboardLogs(provider, '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7', '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9');
-  assert.equal(calls, Math.ceil((0x805b2cf - app.LEADERBOARD_DEPLOY_BLOCK + 1) / app.LEDGER_LOG_CHUNK));
+  const logs = await app.fetchLeaderboardLogs(provider, '0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7', '0x4999336398435a112a79a79ff2deafabb64998769eabb4ae12337770a0f1d9f9', 1000);
+  assert.equal(calls, Math.ceil((0x805b2cf - app.LEADERBOARD_DEPLOY_BLOCK + 1) / 1000));
   assert.equal(logs.length, 6);
   const decoded = logs.map(log => prodIface.parseLog(log));
   for (const event of decoded) {
@@ -166,6 +174,80 @@ await test('正例：生产分片函数按 1000 块窗口读到 6 条链上 Chec
     aggregateLeaderboardLogs(logs, log => prodIface.parseLog(log), Date.UTC(2026, 10, 20, 0, 0, 0) / 1000, ENTRY_WINDOW_START, ENTRY_WINDOW_END));
   assert.equal(rows.length, 6);
   assert.ok(rows.every(row => row.streak === 1 && row.last === '2026-11-19'));
+});
+
+// ---- 双路 fallback：主选失败自动切备选、两路都失败必须报错 ----
+const fakeLog = { blockNumber: 0x8047bed, topics: [], data: '0x' };
+const makeFakeProvider = (name) => {
+  if (name === 'publicnode-ok') return () => ({
+    async getBlockNumber() { return 0x8047bee; },
+    async getLogs() { return [fakeLog]; },
+  });
+  if (name === 'publicnode-fail') return () => ({
+    async getBlockNumber() { throw new Error('-32005 rate limited'); },
+    async getLogs() { throw new Error('should not be called'); },
+  });
+  if (name === 'blxr-ok') return () => ({
+    async getBlockNumber() { return 0x8047bee; },
+    async getLogs() { return [fakeLog]; },
+  });
+  if (name === 'blxr-fail') return () => ({
+    async getBlockNumber() { throw new Error('exceed maximum block range'); },
+    async getLogs() { throw new Error('should not be called'); },
+  });
+  if (name === 'publicnode-empty') return () => ({
+    async getBlockNumber() { return 0x8047bee; },
+    async getLogs() { return []; },
+  });
+  throw new Error('unknown fake provider ' + name);
+};
+const twoSources = (a, b) => [
+  { name: a, url: 'http://' + a, chunk: a === 'publicnode-fail' || a === 'publicnode-empty' || a === 'publicnode-ok' ? 45000 : 1000 },
+  { name: b, url: 'http://' + b, chunk: 1000 },
+];
+
+await test('正例：主选 publicnode 成功 → 直接用主选结果，不切备选', async () => {
+  const calls = [];
+  const providers = {
+    'http://publicnode-ok': makeFakeProvider('publicnode-ok')(),
+    'http://blxr-ok': makeFakeProvider('blxr-ok')(),
+  };
+  const r = await fetchLeaderboardLogsWithFallback('0xaddr', '0xtopic',
+    twoSources('publicnode-ok', 'blxr-ok'), url => { calls.push(url); return providers[url]; });
+  assert.deepEqual(calls, ['http://publicnode-ok']);
+  assert.equal(r.source, 'publicnode-ok');
+  assert.equal(r.logs.length, 1);
+});
+
+await test('正例：主选报错 → 自动切 BLXR 备选', async () => {
+  const calls = [];
+  const providers = {
+    'http://publicnode-fail': makeFakeProvider('publicnode-fail')(),
+    'http://blxr-ok': makeFakeProvider('blxr-ok')(),
+  };
+  const r = await fetchLeaderboardLogsWithFallback('0xaddr', '0xtopic',
+    twoSources('publicnode-fail', 'blxr-ok'), url => { calls.push(url); return providers[url]; });
+  assert.equal(r.source, 'blxr-ok');
+  assert.equal(r.logs.length, 1);
+  assert.deepEqual(calls, ['http://publicnode-fail', 'http://blxr-ok']);
+});
+
+await test('正例：主选异常空结果 → 也切备选', async () => {
+  const providers = {
+    'http://publicnode-empty': makeFakeProvider('publicnode-empty')(),
+    'http://blxr-ok': makeFakeProvider('blxr-ok')(),
+  };
+  const r = await fetchLeaderboardLogsWithFallback('0xaddr', '0xtopic',
+    twoSources('publicnode-empty', 'blxr-ok'), url => providers[url]);
+  assert.equal(r.source, 'blxr-ok');
+});
+
+await test('反例：两路都失败 → 抛错，绝不静默当 0 事件', async () => {
+  await assert.rejects(
+    fetchLeaderboardLogsWithFallback('0xaddr', '0xtopic',
+      twoSources('publicnode-fail', 'blxr-fail'), url =>
+        makeFakeProvider(url.includes('publicnode') ? 'publicnode-fail' : 'blxr-fail')()),
+    /拒绝静默当 0 事件|全部失败/);
 });
 
 console.log(`\n${passed}/${passed} PASS — leaderboard chain read path (offline fixtures + captured real event shape)`);

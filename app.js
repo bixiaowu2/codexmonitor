@@ -10,7 +10,13 @@ const CONTRACT_ABI = [
 const CHECKIN_EVENT_ABI = ['event CheckedIn(uint256 indexed tokenId, uint256 indexed day, uint256 streak)'];
 const ENTRY_WINDOW_START = Date.UTC(2026, 10, 18, 8);  // 2026-11-18T08:00Z，投稿期起
 const ENTRY_WINDOW_END = Date.UTC(2026, 11, 9, 8);    // 2026-12-09T08:00Z，投稿期止
-const RPC_URL = 'https://bsc.rpc.blxrbdn.com';  // 只读公共 RPC；钱包签名仍走 injected provider
+// 只读公共 RPC：主选 publicnode（45k 分片），失败自动切 BLXR（1k 分片）。
+// 两路均为免 key、CORS 开放的公共节点；钱包签名仍走 injected provider。
+const LEADERBOARD_RPCS = [
+  { name: 'publicnode', url: 'https://bsc-rpc.publicnode.com', chunk: 45000 },
+  { name: 'blxr',       url: 'https://bsc.rpc.blxrbdn.com',     chunk: 1000 }
+];
+const RPC_URL = LEADERBOARD_RPCS[0].url;  // 主选，供发布核验与兼容读取
 const DATA_URL = './data/latest.json';
 const AGENT_ID_CONTRACT = '0x60b9262456de011f7d15a54cdd8c48baaa8b022f';
 
@@ -61,32 +67,45 @@ function render(items, cols){
     items.map(r=>'<tr>'+cols.map(c=>`<td>${r[c[0]]??'—'}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 
-
 function esc(s){
   return String(s ?? '').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }
 
 function shortAddr(a){ return a && a.length>10 ? a.slice(0,6)+'…'+a.slice(-4) : (a||'—'); }
 
-async function leaderboardProvider(){
-  return new ethers.JsonRpcProvider(RPC_URL);
-}
-
 // Public BSC RPCs reject `fromBlock:0 -> latest` event queries (archive-token
-// limits / -32005). Use the deployment block as a fixed lower bound and walk
-// bounded ranges; each window stays small enough for key-free public nodes.
+// limits / -32005). Start at the deployment block and walk bounded ranges so
+// every window is accepted by key-free public nodes. Chunk size is per-RPC.
 const LEADERBOARD_DEPLOY_BLOCK = 0x8047035;
-const LEDGER_LOG_CHUNK = 1000;
+const LEDGER_LOG_CHUNK = LEADERBOARD_RPCS[0].chunk; // 主选分片，保留导出兼容
 
-async function fetchLeaderboardLogs(provider, address, topic){
+async function fetchLeaderboardLogs(provider, address, topic, chunk = LEDGER_LOG_CHUNK){
   const latest=await provider.getBlockNumber();
   const logs=[];
-  for(let from=LEADERBOARD_DEPLOY_BLOCK; from<=latest; from+=LEDGER_LOG_CHUNK){
-    const to=Math.min(from+LEDGER_LOG_CHUNK-1, latest);
+  for(let from=LEADERBOARD_DEPLOY_BLOCK; from<=latest; from+=chunk){
+    const to=Math.min(from+chunk-1, latest);
     const part=await provider.getLogs({address, topics:[topic], fromBlock:from, toBlock:to});
+    if(!Array.isArray(part)) throw new Error('getLogs 未返回数组');
     logs.push(...part);
   }
   return logs;
+}
+
+// 主选失败（报错/限流/异常空结果）自动切备选；两路都失败则抛错，绝不静默当 0 事件。
+// provider 可注入，便于离线测试；生产使用公共只读 RPC，无需任何 key。
+async function fetchLeaderboardLogsWithFallback(address, topic, sources = LEADERBOARD_RPCS, makeProvider = url => new ethers.JsonRpcProvider(url)) {
+  const errors = [];
+  for (const source of sources) {
+    try {
+      const provider = makeProvider(source.url);
+      const logs = await fetchLeaderboardLogs(provider, address, topic, source.chunk);
+      if (logs.length > 0) return { logs, provider, source: source.name };
+      errors.push(source.name + ': 空结果（异常）');
+    } catch (e) {
+      errors.push(source.name + ': ' + e.message);
+    }
+  }
+  throw new Error('排行榜只读 RPC 全部失败，拒绝静默当 0 事件：' + errors.join(' | '));
 }
 
 function ledgerLeaderboard(){
@@ -144,11 +163,11 @@ async function loadLeaderboard(){
   if(fixture){ renderLeaderboard(fixture.rows, fixture.events, fixture.sources); return; }
   if(!CONTRACT_ADDRESS){ $('board').innerHTML='<p class="muted">合约未配置，排行榜暂不可用</p>'; $('counters').textContent=''; return; }
   try{
-    const provider=await leaderboardProvider();
-    if(!provider.getLogs) throw new Error('当前 provider 不支持事件查询');
-    const c=new ethers.Contract(CONTRACT_ADDRESS,CHECKIN_EVENT_ABI,provider);
-    const topic=c.filters.CheckedIn().topics[0];
-    const logs=await fetchLeaderboardLogs(provider, CONTRACT_ADDRESS, topic);
+    const probe = new ethers.JsonRpcProvider(LEADERBOARD_RPCS[0].url);
+    if(!probe.getLogs) throw new Error('当前 provider 不支持事件查询');
+    const c=new ethers.Contract(CONTRACT_ADDRESS,CHECKIN_EVENT_ABI,probe);
+    const topic=c.filters.CheckedIn().topics[0]; // 真实 topic 由 ABI 算出
+    const { logs, provider, source } = await fetchLeaderboardLogsWithFallback(CONTRACT_ADDRESS, topic);
     blockByNumberForLeaderboard = (n) => provider.getBlock(n);
     const cur=await provider.getBlock('latest');
     const rows=await aggregateLeaderboardLogs(logs, e=>c.interface.parseLog(e), cur.timestamp, ENTRY_WINDOW_START, ENTRY_WINDOW_END);
@@ -170,7 +189,7 @@ async function loadData(){
 // Test-only export: absent in browsers (no module.exports), used by the
 // isolated Node harness to inject fixed RPC-shaped logs.
 if(typeof module!=='undefined' && module.exports){
-  module.exports = { aggregateLeaderboardLogs, setBlockResolver: fn => { blockByNumberForLeaderboard = fn; }, ENTRY_WINDOW_START, ENTRY_WINDOW_END, LEADERBOARD_DEPLOY_BLOCK, LEDGER_LOG_CHUNK, fetchLeaderboardLogs };
+  module.exports = { aggregateLeaderboardLogs, setBlockResolver: fn => { blockByNumberForLeaderboard = fn; }, ENTRY_WINDOW_START, ENTRY_WINDOW_END, LEADERBOARD_DEPLOY_BLOCK, LEDGER_LOG_CHUNK, LEADERBOARD_RPCS, RPC_URL, fetchLeaderboardLogs, fetchLeaderboardLogsWithFallback };
 }
 
 if(typeof document!=='undefined' && $('connect') && $('checkin')){
