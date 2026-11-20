@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Optional READ-ONLY production-path check for BOTH public RPCs. No wallet, no keys, no writes.
 // Run: node tests/leaderboard-chain.live.test.mjs
-// Each RPC is probed independently; at least one must return the six real events.
+// Each RPC is probed independently; at least one must return the current live event set.
+// Baseline: 4 first-check-in events on day 20776 plus 2 repeat check-ins on day 20777.
+// The count is a floor, not a hard ceiling: new legitimate check-ins must not fail this test.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
@@ -41,8 +43,12 @@ const expected = [
   ['0x859f5cbaafb4572c48ee464ae11047b5c61d50489c8e9e5a7483eabf01b739b2', 0x804844d],
 ];
 
+const BASELINE_EVENT_COUNT = 8;
+const BASELINE_ROW_COUNT = 6;
+
 function verifyEvents(logs, label) {
-  assert.equal(logs.length, 6, `${label} 真实 CheckedIn 应为 6 条，实得 ${logs.length}`);
+  assert.ok(logs.length >= BASELINE_EVENT_COUNT,
+    `${label} 真实 CheckedIn 至少应有 ${BASELINE_EVENT_COUNT} 条，实得 ${logs.length}`);
   for (const [tx, block] of expected) {
     const hit = logs.find(l => l.transactionHash.toLowerCase() === tx);
     assert.ok(hit, `${label} 缺少首签交易 ${tx.slice(0, 12)}…`);
@@ -51,6 +57,11 @@ function verifyEvents(logs, label) {
     assert.equal(parsed.args.day.toString(), '20776');
     assert.equal(parsed.args.streak.toString(), '1');
   }
+  const repeat = logs.find(l => l.transactionHash.toLowerCase() ===
+    '0x9e6a66b3b5ed4acd8b1c002fc90d3f9cc62749bc2785db463d9719a4d522c366');
+  assert.ok(repeat, `${label} 缺少 11-20 复签事件`);
+  assert.equal(iface.parseLog(repeat).args.day.toString(), '20777');
+  assert.equal(iface.parseLog(repeat).args.streak.toString(), '2');
 }
 
 const results = [];
@@ -83,7 +94,8 @@ for (const source of sources) {
     const cur = await provider.getBlock('latest');
     app.setBlockResolver(n => provider.getBlock(n));
     const rows = await app.aggregateLeaderboardLogs(logs, e => iface.parseLog(e), cur.timestamp, app.ENTRY_WINDOW_START, app.ENTRY_WINDOW_END);
-    assert.equal(rows.length, 6, `${source.name} 排行榜应为 6 行`);
+    assert.ok(rows.length >= BASELINE_ROW_COUNT,
+      `${source.name} 排行榜至少应有 ${BASELINE_ROW_COUNT} 行，实得 ${rows.length}`);
     results.push(`${source.name}: ${chunks} 片/${logs.length} 事件/${rows.length} 行 PASS`);
   } catch (e) {
     results.push(`${source.name}: FAIL (${e.message.split('\n')[0]})`);

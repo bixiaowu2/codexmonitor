@@ -4,10 +4,10 @@
 
 ## 已核验事实
 
-- dApp：https://agent-id-checkin-dapp.bixiaowu.workers.dev （Cloudflare Version `deddbd17`；线上 `/app.js` 与本地哈希一致）
+- dApp：https://agent-id-checkin-dapp.bixiaowu.workers.dev （Cloudflare Version `e9b67566-a603-4a63-9f0b-5f355fe3e599`；线上 `/app.js` SHA `54199b520cfb…` 与本地一致）
 - 合约：`0x8d314451f99bffdac9d2d51c683a5b9aecc1ecb7`（BscScan 源码页“Exact Match”已由用户目视确认）
-- 公开仓库：https://github.com/bixiaowu2/codexmonitor/tree/main/agent-id-checkin-dapp （main HEAD `ea5627c97b161a844ea06c702b62c106924c8386`）
-- 排行榜读取真实事件 ABI：`CheckedIn(uint256 indexed tokenId, uint256 indexed day, uint256 streak)`；`node tests/leaderboard-chain.test.mjs` 6/6 PASS。
+- 公开仓库：https://github.com/bixiaowu2/codexmonitor/tree/main/agent-id-checkin-dapp （main HEAD `4ab0aed6b4f5`）
+- 排行榜读取真实事件 ABI：`CheckedIn(uint256 indexed tokenId, uint256 indexed day, uint256 streak)`；离线 `node tests/leaderboard-chain.test.mjs` 11/11 PASS，双路只读 live 测试读到 8 条真实事件、聚合 6 行。
 - 链上交互地址：4/30，缺口 26 由 lead 协调社区渠道；home 不刷量、不批量注册、不碰资金或白名单。
 - 合约无 owner、无升级、无提款、不托管资产；钱包签名与 gas 由用户本人逐笔确认。
 
