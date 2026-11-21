@@ -49,11 +49,22 @@ def _init_tracks():
         updates INTEGER DEFAULT 0,
         closed INTEGER DEFAULT 0, final_mult REAL)''')
     db.execute('CREATE INDEX IF NOT EXISTS by_sym ON alpha_tracks(symbol, first_seen)')
+    db.execute('''CREATE TABLE IF NOT EXISTS entry_quotes(
+        key TEXT PRIMARY KEY, symbol TEXT, futures TEXT, at REAL,
+        bid REAL, ask REAL, bid_qty REAL, ask_qty REAL,
+        depth5_bid REAL, depth5_ask REAL, last REAL, source TEXT)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS entry_forward(
+        key TEXT NOT NULL, horizon TEXT NOT NULL, at REAL, last REAL, mult REAL,
+        PRIMARY KEY(key, horizon))''')
+    db.execute('''CREATE TABLE IF NOT EXISTS track_marks(
+        key TEXT NOT NULL, at REAL NOT NULL, last REAL,
+        PRIMARY KEY(key, at))''')
+    db.execute('DELETE FROM track_marks WHERE at < ?', (time.time() - 90 * 86400,))
     db.commit()
     return db
 
 
-def _record_track(db, sym, address, futs, price, tp1, tp2, now):
+def _record_track(db, sym, address, futs, price, tp1, tp2, now, api=None):
     """把这次观察写进结果表。price 是 demon_track 的 {'first','last','peak_3d'}。"""
     if not price:
         return
@@ -72,6 +83,9 @@ def _record_track(db, sym, address, futs, price, tp1, tp2, now):
             # entry 用 last(入选时的现价) —— 前瞻, 不是 first(3天前收盘, 回溯)
             (key, sym, address, futs, now, now, last, last, last, last,
              0.0, int(bool(tp1)), int(bool(tp2)), 1))
+        if api is not None:
+            _entry_quote(db, key, sym, futs, last, now, api)
+        _mark(db, key, now, last)
     else:
         # 更新既有行
         e = row[6] or last                      # entry 保持首次入选价不变
@@ -82,8 +96,51 @@ def _record_track(db, sym, address, futs, price, tp1, tp2, now):
                 tp1=MAX(tp1,?), tp2=MAX(tp2,?), updates=updates+1
             WHERE key=?''',
             (now, last, pk, tr, max(0.0, 1 - last / pk), int(bool(tp1)), int(bool(tp2)), row[0]))
+        _forward_marks(db, row[0], row[4], e, last, now)
+        _mark(db, row[0], now, last)
     db.commit()
 
+
+def _entry_quote(db, key, sym, futs, last, now, api):
+    """首次入选时抓一次盘口；失败只跳过这一条, 不影响跟踪。"""
+    try:
+        bt = api.get(FUTURES + '/fapi/v1/ticker/bookTicker', {'symbol': futs})
+        dp = api.get(FUTURES + '/fapi/v1/depth', {'symbol': futs, 'limit': 5})
+        if not isinstance(bt, dict):
+            return
+        bid, ask = num(bt.get('bidPrice')), num(bt.get('askPrice'))
+        bid_qty, ask_qty = num(bt.get('bidQty')), num(bt.get('askQty'))
+        bids = (dp or {}).get('bids') or []
+        asks = (dp or {}).get('asks') or []
+        depth_bid = sum(num(p) * num(q) for p, q in bids[:5] if num(p) and num(q))
+        depth_ask = sum(num(p) * num(q) for p, q in asks[:5] if num(p) and num(q))
+        db.execute('''INSERT OR REPLACE INTO entry_quotes
+            (key,symbol,futures,at,bid,ask,bid_qty,ask_qty,depth5_bid,depth5_ask,last,source)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (key, sym, futs, now, bid, ask, bid_qty, ask_qty,
+             depth_bid, depth_ask, last, 'bookTicker+depth5'))
+        db.commit()
+    except Exception:
+        pass
+
+
+def _mark(db, key, at, last):
+    # 每次跟踪追加一行，供任意窗口离线复算；同一次运行只记一次。
+    if not last or last <= 0:
+        return
+    db.execute('INSERT OR IGNORE INTO track_marks(key,at,last) VALUES(?,?,?)',
+               (key, at, last))
+
+
+def _forward_marks(db, key, first_seen, entry, last, now):
+    """按 1h/6h/24h/72h 记首个越过该时点的价格；同 horizon 只记一次。"""
+    if not first_seen or not entry or entry <= 0 or not last:
+        return
+    for label, secs in (('1h', 3600), ('6h', 6 * 3600),
+                        ('24h', 86400), ('72h', 3 * 86400)):
+        if secs <= now - first_seen <= secs + 3600:
+            db.execute('INSERT OR IGNORE INTO entry_forward(key,horizon,at,last,mult) '
+                       'VALUES(?,?,?,?,?)', (key, label, now, last, last / entry))
 
 def _close_stale_tracks(db, now):
     """超过 MAX_DAYS 没更新的标记收盘, 记最终倍数。"""
@@ -273,7 +330,8 @@ def main():
         if tdb is not None and price:
             try:
                 _record_track(tdb, sym, m.get('address'), futs, price,
-                              sym + ':tp1' in tp_hit, sym + ':tp2' in tp_hit, time.time())
+                              sym + ':tp1' in tp_hit, sym + ':tp2' in tp_hit, time.time(),
+                              api=api)
             except Exception:
                 pass   # 记录失败不能影响跟踪与告警
         frs = fetch_funding(api, futs)

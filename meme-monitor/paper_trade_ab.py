@@ -28,6 +28,12 @@ MARK_B = 'ab_h2_v1_early30'
 # 剔除 robinhood 冻结价后仍 +22pp。与 A/B 同一批候选、同一入场价，只差出场规则。
 MARK_C = 'ab_h2_v1_time30'
 TIME_EXIT_SEC = 1800
+# 2026-11-21 D 臂：10 分钟时间出场（lead 2026-11-21T0335Z-lead-home-7e69-ack 批准纸面 A/B；参数锁定 10 分钟）。
+# 同候选/同入场价/同成本，保留止损与移动止盈，只额外加「满 10 分钟全出」。
+# 依据：C 臂 113 笔复算，10 分钟封顶净均值 -9.5%→+1.1%、中位 -43.9%→-23.0%，
+# 配对 +10.7pp（CI +2.1~+19.2）；收益来自提前避开 10 分钟后才触发的止损/止盈。
+MARK_D = 'ab_h2_v1_time10'
+TIME_EXIT_SEC_D = 600
 AB_LIQ_MIN, AB_LIQ_MAX, AB_AGE_MIN, AB_AGE_MAX = 10000, 25000, 5, 15
 LOOKBACK_H = 24
 FIRST_SEEN_H = 30
@@ -332,9 +338,11 @@ def run(matches, now=None, verbose=True):
     opened = open_positions(MARK)
     opened_b = open_positions(MARK_B)
     opened_c = open_positions(MARK_C)
+    opened_d = open_positions(MARK_D)
     for p in db.execute('SELECT * FROM positions WHERE closed=0').fetchall():
         is_b = (p['mark'] == MARK_B)
         is_c = (p['mark'] == MARK_C)
+        is_d = (p['mark'] == MARK_D)
         entry = p['entry'] or 0
         # 2026-11-11：Jupiter 认识这个币但没有 usdPrice = 流动性≈0，已死透。
         # 原来会一直挂到 7 天超时才平，且用死前的 last_price 结算 —— 低估亏损。
@@ -401,6 +409,17 @@ def run(matches, now=None, verbose=True):
                        (now, '时间出场30分', p['key']))
             closed += 1; continue
 
+        # 2026-11-21 D 臂：持仓满 10 分钟，在第一个 ≥10 分钟的轮次按现价全出。
+        # 与 C 臂同位置（止损之前）：取不到价的仓位走不到这里，仍在 30 分钟宽限后
+        # 按归零处理——10 分钟规则无法卖出没有报价的币，这是诚实口径。
+        if is_d and now - (p['opened'] or now) >= TIME_EXIT_SEC_D:
+            left = 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0
+            if left > 0:
+                close_part('time10', left, price)
+            db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
+                       (now, '时间出场10分', p['key']))
+            closed += 1; continue
+
         if price <= p['stop']:
             close_part('stop', 1.0 - (int(p['tp1_done']) + int(p['tp2_done'])) / 3.0, price)
             db.execute("UPDATE positions SET closed=1, closed_at=?, note=? WHERE key=?",
@@ -429,7 +448,7 @@ def run(matches, now=None, verbose=True):
     if verbose:
         tot = db.execute('SELECT COUNT(*) FROM positions').fetchone()[0]
         print(f'实验臂 H2({MARK}): 新开仓 {opened} | 平仓 {closed} | 台账共 {tot} 笔')
-        print(f'  B 臂新开仓 {opened_b} | C 臂新开仓 {opened_c}')
+        print(f'  B 臂新开仓 {opened_b} | C 臂新开仓 {opened_c} | D 臂新开仓 {opened_d}')
     db.close()
     return opened, closed
 
@@ -461,7 +480,10 @@ def report():
     rows_c = db.execute('SELECT * FROM positions WHERE mark=?', (MARK_C,)).fetchall()
     cl_c = [r['realized'] for r in rows_c if r['closed'] and r['realized'] is not None]
     print(f'  C 臂({MARK_C}): 共 {len(rows_c)} 笔 | 已平 {len(cl_c)}')
-    for _lbl, _cl in (('B', cl_b), ('C', cl_c)):
+    rows_d = db.execute('SELECT * FROM positions WHERE mark=?', (MARK_D,)).fetchall()
+    cl_d = [r['realized'] for r in rows_d if r['closed'] and r['realized'] is not None]
+    print(f'  D 臂({MARK_D}): 共 {len(rows_d)} 笔 | 已平 {len(cl_d)}')
+    for _lbl, _cl in (('B', cl_b), ('C', cl_c), ('D', cl_d)):
         if _cl:
             vv = sorted(_cl)
             print(f'    {_lbl} 均值 {sum(_cl)/len(_cl)*100:+.1f}% | 中位 {vv[len(_cl)//2]*100:+.1f}%'

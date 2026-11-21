@@ -34,7 +34,9 @@ def main():
             q = report.get('data_quality', {})
             summary = {'version': report.get('version'), 'as_of': report.get('as_of'),
                        'rows': q.get('rows'), 'fresh': q.get('fresh_rows'), 'stale': q.get('stale_rows'),
-                       'source_errors': q.get('source_errors'), 'events': len(report.get('events', [])),
+                       'source_errors': q.get('source_errors'), 'fallback': q.get('fallback_rows'),
+                       'stale_reasons': q.get('stale_reasons'),
+                       'events': len(report.get('events', [])),
                        # 2026-10-25 补度量: 按市场拆开, 用来查「评估样本 83% 是美股、而池子 67% 是 A股」的成因。
                        # suppressed = 分数跳升够格但因 fresh=False 没发事件的行。只加字段, 不改行为。
                        'events_by_market': report.get('events_by_market'),

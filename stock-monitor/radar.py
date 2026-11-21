@@ -17,8 +17,10 @@ def data_quality(rows, statuses):
     return {'rows':len(rows),'fresh_rows':sum(bool(r.get('fresh')) for r in rows),
             'stale_rows':sum(not r.get('fresh') for r in rows),
             'stale_reasons':dict(sorted(reasons.items())),
-            'source_errors':sum(s.get('status')!='ok' for s in statuses),
-            'source_error_symbols':[s.get('symbol') for s in statuses if s.get('status')!='ok']}
+            'source_errors':sum(s.get('status') not in ('ok','ok_fallback') for s in statuses),
+            'fallback_rows':sum(s.get('status')=='ok_fallback' for s in statuses),
+            'source_error_symbols':[s.get('symbol') for s in statuses if s.get('status') not in ('ok','ok_fallback')],
+            'fallback_symbols':[s.get('symbol') for s in statuses if s.get('status')=='ok_fallback']}
 
 def fmt(row, s):
     change = f'{row["change"]:.1f}%' if row.get('change') is not None else '未知'
